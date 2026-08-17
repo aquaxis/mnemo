@@ -90,7 +90,7 @@ test('new default config keys are filled without discarding user values (FR-INST
   assert.equal(config.ai.outputLanguage, 'ja', 'missing key filled from defaults');
   assert.equal(config.port, 3000, 'missing port filled from defaults');
   // Reliability limits added by a later release (FR-REL-1/3/5).
-  assert.equal(config.ai.timeoutMs, 120000, 'timeout filled from defaults');
+  assert.equal(config.ai.timeoutMs, 300000, 'timeout filled from defaults');
   assert.equal(config.ai.maxOutputBytes, 2000000, 'output cap filled from defaults');
   assert.equal(config.ai.maxConcurrentRuns, 2, 'run limit filled from defaults');
   rmSync(dataDir, { recursive: true, force: true });

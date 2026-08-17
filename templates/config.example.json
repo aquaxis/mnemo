@@ -3,7 +3,7 @@
   "ai": {
     "type": "agent-cli",
     "outputLanguage": "ja",
-    "timeoutMs": 120000,
+    "timeoutMs": 300000,
     "maxOutputBytes": 2000000,
     "maxConcurrentRuns": 2,
     "backends": {

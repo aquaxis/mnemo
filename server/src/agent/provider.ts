@@ -63,9 +63,31 @@ const PROMPT = (title: string, text: string, lang: string) =>
   `Write the key points and the summary in ${languageName(lang)}.` +
   `\n\n${text.slice(0, 12000)}`;
 
-/** Prompt for a chat turn: system framing + conversation history (FR-CHAT). */
+/**
+ * Prompt for a chat turn: system framing + conversation history (FR-CHAT).
+ *
+ * Questions are answered by **researching the web comprehensively** rather than
+ * from memory alone (FR-CHAT-8): search broadly, cross-check several
+ * independent sources, and return a detailed answer that lists what was
+ * consulted. The instruction is prompt-level, so the research is carried out by
+ * the backend's own browsing tools (agent-cli); a backend without web access
+ * simply answers from what it has.
+ */
 const CHAT_PROMPT = (messages: ChatMessage[], lang: string) =>
-  `You are Mnemo's helpful AI assistant. Respond in ${languageName(lang)}. ` +
+  `You are Mnemo's research assistant. Respond in ${languageName(lang)}.\n` +
+  `For any question that asks about facts, events, products, documentation or ` +
+  `anything that may have changed recently, research the web before answering: ` +
+  `search broadly with several different queries, open the most relevant ` +
+  `results, and cross-check the claims against multiple independent sources ` +
+  `instead of relying on the first hit or on memory alone.\n` +
+  `Answer in depth: cover the question comprehensively, organize the reply with ` +
+  `Markdown headings and lists, include the concrete details that matter ` +
+  `(numbers, dates, versions, trade-offs), and note where sources disagree or ` +
+  `where the evidence is thin. End with a "Sources" list of the pages you used ` +
+  `(title + URL). If you could not search the web, say so and answer from your ` +
+  `own knowledge, marking it as unverified.\n` +
+  `Skip the research only for small talk or questions purely about this ` +
+  `conversation or the user's own notes.\n` +
   `The user's notes are Markdown files under the current working directory ` +
   `(subfolders per category); you may search and read them to answer (FR-FILE-6).\n\n` +
   messages.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n') +

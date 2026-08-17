@@ -61,8 +61,13 @@ const DEFAULT_BACKENDS: Record<string, AiBackendSettings> = {
 
 // Shipped defaults: agent-cli backend and Japanese output (FR-SETTINGS-5).
 // agent-cli uses its own configured provider (e.g. ollama glm-5.1:cloud).
-/** Reliability defaults (FR-REL-1, FR-REL-3, FR-REL-5). */
-const DEFAULT_TIMEOUT_MS = 120000;
+/**
+ * Reliability defaults (FR-REL-1, FR-REL-3, FR-REL-5). The timeout is sized for
+ * a *research* answer (FR-CHAT-8): the agent runs several searches and opens
+ * multiple pages before replying, which routinely takes minutes — measured runs
+ * on a cloud model ranged from seconds to ~1.5 min for a plain answer.
+ */
+const DEFAULT_TIMEOUT_MS = 300000;
 const DEFAULT_MAX_OUTPUT_BYTES = 2000000;
 const DEFAULT_MAX_CONCURRENT_RUNS = 2;
 

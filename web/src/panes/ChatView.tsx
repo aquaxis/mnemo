@@ -1,6 +1,108 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type ChatMessage } from '../api.js';
 
+/**
+ * Turn a conversation into a scheduled task (FR-CHAT-9). The form is pre-filled
+ * from the chat and saved through the ordinary jobs API, so the result is a
+ * normal job that the Scheduler view lists, edits and runs.
+ */
+function ScheduleTaskForm(props: {
+  instruction: string;
+  onClose: () => void;
+  onCreated: (name: string) => void;
+}) {
+  const [name, setName] = useState(firstLine(props.instruction));
+  const [cronExpr, setCronExpr] = useState('0 8 * * *');
+  const [instruction, setInstruction] = useState(props.instruction);
+  const [category, setCategory] = useState('collected');
+  const [status, setStatus] = useState('');
+
+  async function create() {
+    if (!name.trim() || !instruction.trim()) {
+      setStatus('Name and instruction are required.');
+      return;
+    }
+    setStatus('Creating…');
+    try {
+      await api.createJob({
+        name: name.trim(),
+        cron: cronExpr.trim(),
+        action: 'collect',
+        params: { instruction: instruction.trim(), sources: [], category: category.trim() },
+        enabled: true
+      });
+      props.onCreated(name.trim());
+    } catch (err) {
+      setStatus(`⚠️ ${err instanceof Error ? err.message : 'Could not create the task'}`);
+    }
+  }
+
+  return (
+    <div className="border-b border-border bg-muted/30 px-6 py-4">
+      <div className="mx-auto max-w-2xl space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Schedule this as a recurring task</h2>
+          <button className="text-xs text-gray-500 hover:underline" onClick={props.onClose}>
+            Close
+          </button>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-gray-600">Task name</label>
+          <input
+            className="w-full rounded border border-border p-2 text-sm outline-none"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-gray-600">
+            Schedule (cron expression)
+          </label>
+          <input
+            className="w-full rounded border border-border p-2 text-sm outline-none"
+            placeholder="min hour day month weekday — e.g. 0 8 * * 1-5"
+            value={cronExpr}
+            onChange={(e) => setCronExpr(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-gray-600">
+            Instruction (what the AI agent should do)
+          </label>
+          <textarea
+            className="h-24 w-full rounded border border-border p-2 text-sm outline-none"
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-gray-600">Save to category</label>
+          <input
+            className="w-full rounded border border-border p-2 text-sm outline-none"
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+          />
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            className="rounded bg-accent px-4 py-1.5 text-sm font-medium text-white"
+            onClick={create}
+          >
+            Create task
+          </button>
+          <span className="text-xs text-gray-500">{status}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** First non-empty line, trimmed to a usable task name. */
+function firstLine(text: string): string {
+  const line = text.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+  return line.length > 60 ? `${line.slice(0, 57)}…` : line;
+}
+
 /** Conversational chat with the configured AI agent (FR-CHAT). */
 export function ChatView() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -8,6 +110,7 @@ export function ChatView() {
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [saveStatus, setSaveStatus] = useState('');
+  const [scheduling, setScheduling] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   // Lets the user cancel a slow reply; aborting also stops the agent run on the
   // server, so it does not keep holding a concurrency slot.
@@ -101,7 +204,12 @@ export function ChatView() {
     setMessages([]);
     savedIdRef.current = undefined;
     setSaveStatus('');
+    setScheduling(false);
   }
+
+  /** The latest user message seeds the task instruction (FR-CHAT-9). */
+  const lastUserMessage =
+    [...messages].reverse().find((m) => m.role === 'user')?.content ?? input.trim();
 
   return (
     <div className="flex h-full flex-col">
@@ -109,12 +217,20 @@ export function ChatView() {
         <div>
           <h1 className="text-lg font-bold">Chat</h1>
           <p className="text-xs text-gray-500">
-            Talk to the AI agent configured in Settings (it can search the web).
-            Conversations save automatically.
+            Ask a question — the AI agent researches the web and answers in detail.
+            Conversations save automatically; “Schedule task” turns one into a recurring job.
           </p>
         </div>
         <div className="flex items-center gap-3 text-sm">
           <span className="text-xs text-gray-500">{saveStatus}</span>
+          <button
+            className="rounded border border-border px-3 py-1 hover:bg-muted disabled:opacity-50"
+            disabled={!lastUserMessage.trim()}
+            title="Turn this conversation into a recurring task"
+            onClick={() => setScheduling((v) => !v)}
+          >
+            Schedule task
+          </button>
           <button
             className="rounded border border-border px-3 py-1 hover:bg-muted disabled:opacity-50"
             disabled={!messages.length}
@@ -124,6 +240,17 @@ export function ChatView() {
           </button>
         </div>
       </header>
+
+      {scheduling && (
+        <ScheduleTaskForm
+          instruction={lastUserMessage}
+          onClose={() => setScheduling(false)}
+          onCreated={(name) => {
+            setScheduling(false);
+            setSaveStatus(`Task “${name}” created — see Scheduler`);
+          }}
+        />
+      )}
 
       <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
         {!messages.length && (

@@ -148,21 +148,19 @@ app.post<{ Body: { sources: string[]; category?: string } }>('/api/agent/collect
 });
 
 // --- AI agent chat (FR-CHAT) ------------------------------------------------
-app.post<{ Body: { messages: ChatMessage[] } }>('/api/chat', async (req) => {
+app.post<{ Body: { messages: ChatMessage[] } }>('/api/chat', async (req, reply) => {
   const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
-  // Cancelling in the UI (or simply closing the tab) closes the request; stop
-  // the agent run instead of letting it hold a concurrency slot (FR-CHAT-7).
+  // Cancelling in the UI (or closing the tab) drops the connection before the
+  // response is written; stop the agent run instead of letting it hold a
+  // concurrency slot (FR-CHAT-7). Watch the *response* stream: the request
+  // stream also emits "close" once its body has been read, which would abort
+  // every normal chat.
   const controller = new AbortController();
-  let done = false;
-  req.raw.once('close', () => {
-    if (!done) controller.abort();
+  reply.raw.once('close', () => {
+    if (!reply.raw.writableFinished) controller.abort();
   });
-  try {
-    const reply = await collector.chat(messages, controller.signal);
-    return { reply };
-  } finally {
-    done = true;
-  }
+  const text = await collector.chat(messages, controller.signal);
+  return { reply: text };
 });
 
 // Persist a conversation as a Markdown note under the `chats` category (FR-CHAT-4).

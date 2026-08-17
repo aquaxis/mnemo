@@ -14,11 +14,11 @@ The name comes from **Mnemosyne**, the Greek goddess of memory.
 - **Three-pane UI** (navigation · note list · editor), modeled on the shadcn Mail layout; the left and middle panes collapse.
 - **Live Markdown editor** — Obsidian-style inline live preview (CodeMirror 6 + [codemirror-live-markdown](https://codemirror-live-markdown.vercel.app/)).
 - **AI information collection** — crawl web pages, extract key points, save them as notes.
-- **AI chat** — converse with the configured AI agent (a web-capable backend like agent-cli can search the web and search your notes during the reply); conversations auto-save as notes.
+- **AI chat (research mode)** — ask a question and the agent researches the web comprehensively (several searches, multiple sources cross-checked) before answering in detail with a list of sources; it can search your notes too. Conversations auto-save as notes, show the elapsed time while working, can be cancelled, and can be turned into a recurring task with **Schedule task**.
 - **AI note search** — the agent can search across all of your notes (FR-FILE-6).
 - **Selectable AI agent** — choose the backend: agent-cli or Claude Code (CLI). The Claude API is not used.
 - **Settings page** — pick the active AI backend, set the AI output language, and edit per-backend settings (command, args, model).
-- **Cron scheduling** — run recurring tasks by date/time or weekday; each task gives the AI agent an instruction to execute (the agent finds its own sources), not just a fixed crawl.
+- **Cron scheduling** — run recurring tasks by date/time or weekday; each task gives the AI agent an instruction to execute (the agent finds its own sources), not just a fixed crawl. Tasks can be created in the Scheduler view or straight from a chat.
 - **Markdown-first storage** — all knowledge as Markdown, organized into nested folders (categories); binaries stored separately.
 
 ## Requirements
@@ -91,7 +91,7 @@ On first run, `data/` is seeded from `templates/`. Edit `data/config.json`:
   "ai": {
     "type": "agent-cli",
     "outputLanguage": "ja",
-    "timeoutMs": 120000,
+    "timeoutMs": 300000,
     "maxOutputBytes": 2000000,
     "maxConcurrentRuns": 2,
     "backends": {
@@ -121,7 +121,7 @@ so collection never hard-fails.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `ai.timeoutMs` | `120000` | A backend that does not answer within this time is stopped and the failure is reported, so chat and tasks never hang. Also editable on the Settings page. |
+| `ai.timeoutMs` | `300000` | A backend that does not answer within this time is stopped and the failure is reported, so chat and tasks never hang. The default is sized for research answers, which take minutes. Also editable on the Settings page. |
 | `ai.maxOutputBytes` | `2000000` | Cap on the output collected from a backend, so a runaway CLI cannot exhaust memory. |
 | `ai.maxConcurrentRuns` | `2` | How many agent runs (chat, collection, scheduled tasks) may run at once; the rest queue. |
 

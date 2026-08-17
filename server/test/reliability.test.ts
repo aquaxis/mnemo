@@ -11,6 +11,7 @@
  * Run with: npm test
  */
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -112,6 +113,44 @@ test('a cancelled request stops the backend run (FR-CHAT-7)', async () => {
   assert.ok(err instanceof BackendError, 'the run rejects when cancelled');
   assert.equal(err.reason, 'cancelled');
   assert.ok(Date.now() - started < 5000, 'it stops at once, not at the timeout');
+});
+
+/**
+ * A POST body is fully read before the handler runs, and Node then emits
+ * "close" on the *request* stream — so watching that stream to detect a
+ * disconnect aborts every normal chat. `/api/chat` therefore watches the
+ * response stream instead; this pins the distinction (FR-CHAT-6, FR-CHAT-7).
+ */
+test('a completed POST is not mistaken for a client disconnect (FR-CHAT-6)', async () => {
+  const seen: Array<{ watcher: string; abortedBeforeReply: boolean }> = [];
+
+  const server = createServer((req, res) => {
+    let requestClosed = false;
+    let responseClosedEarly = false;
+    req.on('close', () => (requestClosed = true));
+    res.on('close', () => {
+      if (!res.writableFinished) responseClosedEarly = true;
+    });
+    req.resume(); // consume the body, as a JSON body parser does
+    req.on('end', () => {
+      // Stand-in for the slow agent run: the reply is written later.
+      setTimeout(() => {
+        seen.push({ watcher: 'request', abortedBeforeReply: requestClosed });
+        seen.push({ watcher: 'response', abortedBeforeReply: responseClosedEarly });
+        res.end('{}');
+      }, 50);
+    });
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as { port: number };
+  await fetch(`http://127.0.0.1:${port}/api/chat`, { method: 'POST', body: '{"messages":[]}' });
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+
+  const request = seen.find((s) => s.watcher === 'request')!;
+  const response = seen.find((s) => s.watcher === 'response')!;
+  assert.equal(request.abortedBeforeReply, true, 'the request stream closes on its own — unusable');
+  assert.equal(response.abortedBeforeReply, false, 'the response stream marks only real disconnects');
 });
 
 test('concurrent runs are limited and queued (FR-REL-5)', async () => {
