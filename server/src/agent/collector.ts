@@ -43,6 +43,11 @@ export class Collector {
     return this.provider.type;
   }
 
+  /** The active backend, for callers that need it directly (e.g. FR-CHAT-9). */
+  get aiProvider(): AiProvider {
+    return this.provider;
+  }
+
   /** Chat with the active AI agent; `signal` cancels the run (FR-CHAT, FR-CHAT-7). */
   chat(messages: ChatMessage[], signal?: AbortSignal): Promise<string> {
     return this.provider.chat(messages, signal);

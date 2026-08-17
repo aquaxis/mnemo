@@ -14,7 +14,8 @@ The name comes from **Mnemosyne**, the Greek goddess of memory.
 - **Three-pane UI** (navigation · note list · editor), modeled on the shadcn Mail layout; the left and middle panes collapse.
 - **Live Markdown editor** — Obsidian-style inline live preview (CodeMirror 6 + [codemirror-live-markdown](https://codemirror-live-markdown.vercel.app/)).
 - **AI information collection** — crawl web pages, extract key points, save them as notes.
-- **AI chat (research mode)** — ask a question and the agent researches the web comprehensively (several searches, multiple sources cross-checked) before answering in detail with a list of sources; it can search your notes too. Conversations auto-save as notes, show the elapsed time while working, can be cancelled, and can be turned into a recurring task with **Schedule task**.
+- **AI chat (research mode)** — ask a question and the agent researches the **latest** information on the web (several searches, recent sources cross-checked) before answering in detail with a list of sources; it can search your notes too. Conversations auto-save as notes, show the elapsed time against the timeout while working, and can be cancelled.
+- **Schedule a task by asking** — say “every morning, collect the AI news” and Mnemo recognizes the request, rewrites it into a proper agent instruction, and registers it in the Scheduler; the reply tells you what was created. A **Schedule task** button does the same manually.
 - **AI note search** — the agent can search across all of your notes (FR-FILE-6).
 - **Selectable AI agent** — choose the backend: agent-cli or Claude Code (CLI). The Claude API is not used.
 - **Settings page** — pick the active AI backend, set the AI output language, and edit per-backend settings (command, args, model).

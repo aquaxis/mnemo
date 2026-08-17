@@ -111,6 +111,9 @@ export function ChatView() {
   const [elapsed, setElapsed] = useState(0);
   const [saveStatus, setSaveStatus] = useState('');
   const [scheduling, setScheduling] = useState(false);
+  // The timeout in force, shown next to the elapsed time (FR-CHAT-7). Read from
+  // the settings API so it tracks the configured value.
+  const [timeoutSec, setTimeoutSec] = useState<number | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   // Lets the user cancel a slow reply; aborting also stops the agent run on the
   // server, so it does not keep holding a concurrency slot.
@@ -123,6 +126,14 @@ export function ChatView() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, busy]);
+
+  // Without the setting the elapsed time is shown alone (FR-CHAT-7).
+  useEffect(() => {
+    api
+      .settings()
+      .then((r) => setTimeoutSec(Math.round((r.ai?.timeoutMs ?? 0) / 1000) || null))
+      .catch(() => setTimeoutSec(null));
+  }, []);
 
   // Count the seconds while waiting: a slow backend should look slow, not stuck.
   useEffect(() => {
@@ -168,8 +179,18 @@ export function ChatView() {
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const { reply } = await api.chat(next, controller.signal);
-      setMessages([...next, { role: 'assistant', content: reply }]);
+      const { reply, scheduled, scheduleError } = await api.chat(next, controller.signal);
+      // A recurring-task request is registered server-side; report what was
+      // created so the user can confirm or correct it (FR-CHAT-9).
+      const note = scheduled
+        ? `\n\n---\n\n🗓 **Scheduled task registered** — see Scheduler to edit or run it.\n` +
+          `- **Name:** ${scheduled.name}\n` +
+          `- **Schedule:** \`${scheduled.cron}\`\n` +
+          `- **Instruction:** ${scheduled.instruction}`
+        : scheduleError
+          ? `\n\n---\n\n⚠️ Could not register a scheduled task: ${scheduleError}`
+          : '';
+      setMessages([...next, { role: 'assistant', content: reply + note }]);
     } catch (err) {
       if (controller.signal.aborted) {
         setMessages([...next, { role: 'assistant', content: '⏹ Cancelled.' }]);
@@ -274,7 +295,7 @@ export function ChatView() {
           {busy && (
             <div className="flex items-center gap-3 self-start rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-gray-500">
               <span>
-                Thinking… {elapsed}s
+                Thinking… {elapsed}s{timeoutSec ? ` / ${timeoutSec}s` : ''}
                 {elapsed >= 20 && (
                   <span className="text-gray-400"> — the AI agent is still working</span>
                 )}

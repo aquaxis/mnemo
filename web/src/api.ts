@@ -117,7 +117,14 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ messages }),
       signal
-    }).then(json<{ reply: string }>),
+    }).then(
+      json<{
+        reply: string;
+        /** Set when the message asked for a recurring task (FR-CHAT-9). */
+        scheduled?: { id: string; name: string; cron: string; instruction: string };
+        scheduleError?: string;
+      }>
+    ),
   saveChat: (messages: ChatMessage[], id?: string) =>
     fetch('/api/chat/save', {
       method: 'POST',

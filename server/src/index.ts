@@ -23,6 +23,7 @@ import {
   type ChatMessage
 } from './agent/provider.js';
 import { Collector } from './agent/collector.js';
+import { proposeJob } from './agent/task-proposal.js';
 import { Scheduler } from './scheduler/scheduler.js';
 
 let config = loadConfig();
@@ -159,8 +160,56 @@ app.post<{ Body: { messages: ChatMessage[] } }>('/api/chat', async (req, reply) 
   reply.raw.once('close', () => {
     if (!reply.raw.writableFinished) controller.abort();
   });
+
+  // If the message asks for a recurring task, register it in the scheduler and
+  // tell the user what was created (FR-CHAT-9). The analysis runs *alongside*
+  // the reply — in sequence the two agent runs would add up and could approach
+  // the timeout — and it never blocks the answer: a failure to analyze or
+  // register is reported next to the reply, which still goes back.
+  const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+  const proposalPromise = lastUser
+    ? proposeJob(collector.aiProvider, lastUser, controller.signal)
+    : Promise.resolve(null);
+  // Attach a catch immediately so a rejection can never become unhandled while
+  // the reply is still being awaited.
+  const proposalSettled = proposalPromise.then(
+    (p) => ({ proposal: p, error: null as string | null }),
+    (err: unknown) => ({
+      proposal: null,
+      error: err instanceof Error ? err.message : String(err)
+    })
+  );
+
   const text = await collector.chat(messages, controller.signal);
-  return { reply: text };
+  const { proposal, error } = await proposalSettled;
+
+  let scheduled: { id: string; name: string; cron: string; instruction: string } | undefined;
+  let scheduleError: string | undefined = error ?? undefined;
+  if (proposal && !controller.signal.aborted) {
+    try {
+      const job = scheduler.create({
+        name: proposal.name,
+        cron: proposal.cron,
+        action: 'collect',
+        params: { instruction: proposal.instruction, sources: [], category: proposal.category },
+        enabled: true
+      });
+      scheduled = {
+        id: job.id,
+        name: job.name,
+        cron: job.cron,
+        instruction: job.params.instruction ?? ''
+      };
+      app.log.info({ jobId: job.id, cron: job.cron }, 'Registered a task from chat');
+    } catch (err) {
+      scheduleError = err instanceof Error ? err.message : String(err);
+    }
+  }
+  if (scheduleError) {
+    app.log.warn({ error: scheduleError }, 'Could not register a task from chat');
+  }
+
+  return { reply: text, scheduled, scheduleError };
 });
 
 // Persist a conversation as a Markdown note under the `chats` category (FR-CHAT-4).
