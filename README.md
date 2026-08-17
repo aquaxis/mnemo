@@ -37,6 +37,33 @@ Or into a specific directory:
 curl -fsSL https://raw.githubusercontent.com/aquaxis/mnemo/main/install.sh | sh -s -- my-mnemo
 ```
 
+## Update (your data is never touched)
+
+From inside an installation:
+
+```bash
+npm run update
+```
+
+Or re-run the one-liner on an existing installation — it updates instead of
+reinstalling:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aquaxis/mnemo/main/install.sh | sh -s -- my-mnemo
+```
+
+An update refreshes the source and rebuilds; **`data/` is never written,
+moved, or deleted** — your notes (including nested folders), binary assets,
+`data/config.json`, and scheduled jobs with their run history all survive. New
+configuration keys added by a release are filled from defaults without
+discarding your settings.
+
+The update is deliberately conservative: with a git checkout it is
+`git pull --ff-only`, so local changes or a diverged branch abort with a message
+instead of being overwritten. Without git, the release is downloaded to a
+temporary directory and only source paths are copied over the installation. If
+the target directory is not a Mnemo installation, the script refuses to touch it.
+
 ## Manual setup
 
 ```bash

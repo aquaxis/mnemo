@@ -37,6 +37,33 @@ curl -fsSL https://raw.githubusercontent.com/aquaxis/mnemo/main/install.sh | sh
 curl -fsSL https://raw.githubusercontent.com/aquaxis/mnemo/main/install.sh | sh -s -- my-mnemo
 ```
 
+## アップデート（データは破壊されません）
+
+インストール済みのディレクトリ内で実行します：
+
+```bash
+npm run update
+```
+
+既存のインストールに対してワンライナーを再実行しても、再インストールではなく
+アップデートになります：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aquaxis/mnemo/main/install.sh | sh -s -- my-mnemo
+```
+
+アップデートはソースの更新と再ビルドのみを行い、**`data/` には一切書き込み・
+移動・削除を行いません**。ノート（下位階層のフォルダを含む）、バイナリ資産、
+`data/config.json`、スケジュールタスクとその実行履歴はすべてそのまま保持されます。
+新しいリリースで追加された設定キーは、既存の設定値を壊さずデフォルトから補完
+されます。
+
+アップデートは安全側に倒しています。git チェックアウトの場合は
+`git pull --ff-only` のみを行うため、ローカル変更やブランチの分岐があるときは
+上書きせずメッセージを表示して中断します。git が無い場合は一時ディレクトリに
+ダウンロードし、ソースのパスだけをコピーします。対象ディレクトリが Mnemo の
+インストールでない場合は、何も変更せず中断します。
+
 ## 手動セットアップ
 
 ```bash
