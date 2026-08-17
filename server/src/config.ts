@@ -28,12 +28,29 @@ export interface AiConfig {
   /** Language for generated summaries, e.g. "en", "ja" (FR-SETTINGS-4). */
   outputLanguage: string;
   backends: Record<string, AiBackendSettings>;
+  /** Hard limit for a single backend invocation, in ms (FR-REL-1). */
+  timeoutMs: number;
+  /** Cap on the output collected from a backend, in bytes (FR-REL-3). */
+  maxOutputBytes: number;
+  /** Maximum simultaneous agent invocations (FR-REL-5). */
+  maxConcurrentRuns: number;
 }
+
+/**
+ * Where the server writes its log. Writing to an inherited terminal or pipe is
+ * *synchronous* in Node on POSIX: if that terminal goes away or stops draining,
+ * every log write blocks the event loop and the whole server stops answering
+ * (FR-REL-4). Logging therefore defaults to a file under the data directory;
+ * `MNEMO_LOG=stdout` opts back into console logging for development.
+ */
+export type LogTarget = 'file' | 'stdout';
 
 export interface AppConfig {
   port: number;
   dataDir: string;
   ai: AiConfig;
+  logTarget: LogTarget;
+  logFile: string;
 }
 
 const DEFAULT_BACKENDS: Record<string, AiBackendSettings> = {
@@ -44,15 +61,33 @@ const DEFAULT_BACKENDS: Record<string, AiBackendSettings> = {
 
 // Shipped defaults: agent-cli backend and Japanese output (FR-SETTINGS-5).
 // agent-cli uses its own configured provider (e.g. ollama glm-5.1:cloud).
+/** Reliability defaults (FR-REL-1, FR-REL-3, FR-REL-5). */
+const DEFAULT_TIMEOUT_MS = 120000;
+const DEFAULT_MAX_OUTPUT_BYTES = 2000000;
+const DEFAULT_MAX_CONCURRENT_RUNS = 2;
+
+const DEFAULT_DATA_DIR = process.env.MNEMO_DATA_DIR ?? join(ROOT_DIR, 'data');
+
 const DEFAULTS: AppConfig = {
   port: Number(process.env.MNEMO_PORT ?? 3000),
-  dataDir: process.env.MNEMO_DATA_DIR ?? join(ROOT_DIR, 'data'),
+  dataDir: DEFAULT_DATA_DIR,
   ai: {
     type: (process.env.MNEMO_AI_TYPE as AiBackendType) ?? 'agent-cli',
     outputLanguage: process.env.MNEMO_AI_LANG ?? 'ja',
-    backends: DEFAULT_BACKENDS
-  }
+    backends: DEFAULT_BACKENDS,
+    timeoutMs: Number(process.env.MNEMO_AI_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS),
+    maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+    maxConcurrentRuns: DEFAULT_MAX_CONCURRENT_RUNS
+  },
+  logTarget: process.env.MNEMO_LOG === 'stdout' ? 'stdout' : 'file',
+  logFile: join(DEFAULT_DATA_DIR, 'logs', 'mnemo.log')
 };
+
+/** A positive finite number from the config file, or the default. */
+function positive(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
 
 /**
  * Seed the data directory from templates/ on first run (FR-INSTALL-3, T-7.2).
@@ -83,7 +118,8 @@ function ensureLayout(dataDir: string): void {
     join(dataDir, 'assets', 'images'),
     join(dataDir, 'assets', 'audio'),
     join(dataDir, 'assets', 'video'),
-    join(dataDir, 'jobs')
+    join(dataDir, 'jobs'),
+    join(dataDir, 'logs')
   ]) {
     mkdirSync(dir, { recursive: true });
   }
@@ -111,8 +147,15 @@ export function loadConfig(): AppConfig {
     ai: {
       type: fileConfig.ai?.type ?? DEFAULTS.ai.type,
       outputLanguage: fileConfig.ai?.outputLanguage ?? DEFAULTS.ai.outputLanguage,
-      backends: { ...DEFAULT_BACKENDS, ...(fileConfig.ai?.backends ?? {}) }
-    }
+      backends: { ...DEFAULT_BACKENDS, ...(fileConfig.ai?.backends ?? {}) },
+      // Reliability limits: filled from defaults for configs written by an
+      // earlier release (FR-INSTALL-5, FR-REL-1/3/5).
+      timeoutMs: positive(fileConfig.ai?.timeoutMs, DEFAULTS.ai.timeoutMs),
+      maxOutputBytes: positive(fileConfig.ai?.maxOutputBytes, DEFAULTS.ai.maxOutputBytes),
+      maxConcurrentRuns: positive(fileConfig.ai?.maxConcurrentRuns, DEFAULTS.ai.maxConcurrentRuns)
+    },
+    logTarget: fileConfig.logTarget === 'stdout' ? 'stdout' : DEFAULTS.logTarget,
+    logFile: fileConfig.logFile ?? join(dataDir, 'logs', 'mnemo.log')
   };
 }
 
@@ -126,6 +169,7 @@ export function saveSettings(
     type?: AiBackendType;
     outputLanguage?: string;
     backends?: Record<string, AiBackendSettings>;
+    timeoutMs?: number;
   }
 ): AppConfig {
   const configPath = join(dataDir, 'config.json');
@@ -142,7 +186,8 @@ export function saveSettings(
     ...ai,
     type: patch.type ?? ai.type ?? DEFAULTS.ai.type,
     outputLanguage: patch.outputLanguage ?? ai.outputLanguage ?? DEFAULTS.ai.outputLanguage,
-    backends: { ...(ai.backends ?? {}), ...(patch.backends ?? {}) }
+    backends: { ...(ai.backends ?? {}), ...(patch.backends ?? {}) },
+    timeoutMs: positive(patch.timeoutMs ?? ai.timeoutMs, DEFAULTS.ai.timeoutMs)
   };
   writeFileSync(configPath, JSON.stringify(current, null, 2), 'utf8');
   return loadConfig();

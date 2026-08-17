@@ -46,16 +46,37 @@ export interface AiConfig {
   type: string;
   outputLanguage: string;
   backends: Record<string, AiBackendSettings>;
+  /** Hard limit for one AI backend invocation, in ms (FR-REL-1). */
+  timeoutMs: number;
+  maxOutputBytes: number;
+  maxConcurrentRuns: number;
 }
 
 export interface SettingsResponse {
   backends: string[];
   ai: AiConfig;
   port: number;
+  /** Whether each backend's command was found on PATH (FR-REL-6). */
+  available: Record<string, boolean>;
+  /** Where the server writes its log, or null when it logs to the console. */
+  logFile: string | null;
 }
 
+/**
+ * Resolve a JSON response, preserving the server's error text so backend
+ * failures are shown to the user instead of a generic message (FR-REL-6).
+ */
 async function json<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = (await res.json()) as { error?: string };
+      detail = body?.error ?? '';
+    } catch {
+      // Non-JSON error body; fall back to the status text.
+    }
+    throw new Error(detail || `${res.status} ${res.statusText}`);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -110,7 +131,9 @@ export const api = {
     }).then(json<{ createdNotes: string[]; errors: Array<{ url: string; message: string }> }>),
 
   aiBackends: () =>
-    fetch('/api/ai/backends').then(json<{ backends: string[]; selected: string }>),
+    fetch('/api/ai/backends').then(
+      json<{ backends: string[]; selected: string; available: Record<string, boolean> }>
+    ),
   selectAiBackend: (type: string) =>
     fetch('/api/ai/backend', {
       method: 'PUT',
@@ -123,12 +146,13 @@ export const api = {
     type?: string;
     outputLanguage?: string;
     backends?: Record<string, AiBackendSettings>;
+    timeoutMs?: number;
   }) =>
     fetch('/api/settings', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(patch)
-    }).then(json<{ ai: AiConfig; selected: string }>),
+    }).then(json<{ ai: AiConfig; selected: string; available: Record<string, boolean> }>),
 
   jobs: () => fetch('/api/jobs').then(json<{ jobs: Job[] }>),
   createJob: (job: Omit<Job, 'id'>) =>

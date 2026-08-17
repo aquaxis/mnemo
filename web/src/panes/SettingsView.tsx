@@ -28,12 +28,16 @@ const FIELDS: Record<string, Array<keyof AiBackendSettings>> = {
 export function SettingsView() {
   const [backends, setBackends] = useState<string[]>([]);
   const [ai, setAi] = useState<AiConfig | null>(null);
+  const [available, setAvailable] = useState<Record<string, boolean>>({});
+  const [logFile, setLogFile] = useState<string | null>(null);
   const [status, setStatus] = useState('');
 
   useEffect(() => {
     api.settings().then((r) => {
       setBackends(r.backends);
       setAi(r.ai);
+      setAvailable(r.available ?? {});
+      setLogFile(r.logFile ?? null);
     });
   }, []);
 
@@ -55,13 +59,19 @@ export function SettingsView() {
   async function save() {
     if (!ai) return;
     setStatus('Saving…');
-    const r = await api.updateSettings({
-      type: ai.type,
-      outputLanguage: ai.outputLanguage,
-      backends: ai.backends
-    });
-    setAi(r.ai);
-    setStatus(`Saved — active backend: ${r.selected}`);
+    try {
+      const r = await api.updateSettings({
+        type: ai.type,
+        outputLanguage: ai.outputLanguage,
+        backends: ai.backends,
+        timeoutMs: ai.timeoutMs
+      });
+      setAi(r.ai);
+      setAvailable(r.available ?? {});
+      setStatus(`Saved — active backend: ${r.selected}`);
+    } catch (err) {
+      setStatus(`⚠️ ${err instanceof Error ? err.message : 'Save failed'}`);
+    }
   }
 
   return (
@@ -86,6 +96,12 @@ export function SettingsView() {
           <p className="mt-1 text-xs text-gray-400">
             The Claude API is not used; “Claude Code” runs via its CLI.
           </p>
+          {available[selected] === false && (
+            <p className="mt-1 text-xs text-red-600">
+              ⚠️ The command for this backend was not found on PATH. Install it, or correct
+              “command” below — chat and agent tasks will report the failure until then.
+            </p>
+          )}
         </div>
 
         <div>
@@ -131,6 +147,31 @@ export function SettingsView() {
           </div>
         ) : (
           <p className="text-sm text-gray-400">This backend has no configurable settings.</p>
+        )}
+
+        <div>
+          <label className="mb-1 block text-sm font-medium">
+            AI response timeout (seconds)
+          </label>
+          <input
+            type="number"
+            min={5}
+            className="w-full rounded border border-border px-2 py-1.5 text-sm outline-none"
+            value={Math.round((ai.timeoutMs ?? 120000) / 1000)}
+            onChange={(e) =>
+              setAi({ ...ai, timeoutMs: Math.max(5, Number(e.target.value) || 0) * 1000 })
+            }
+          />
+          <p className="mt-1 text-xs text-gray-400">
+            A backend that does not answer within this time is stopped and reported, so chat and
+            tasks never hang.
+          </p>
+        </div>
+
+        {logFile && (
+          <p className="text-xs text-gray-400">
+            Server log: <code>{logFile}</code>
+          </p>
         )}
 
         <div className="flex items-center gap-3">

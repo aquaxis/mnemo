@@ -1,5 +1,22 @@
-import { spawn } from 'node:child_process';
 import type { AiConfig, AiBackendSettings, AiBackendType } from '../config.js';
+import { BackendError, RunLimiter, commandExists, runCli } from './run-cli.js';
+
+export { BackendError, commandExists } from './run-cli.js';
+
+/** Diagnostics sink; set by the server so backend faults are logged (FR-REL-6). */
+export type LogFn = (message: string, detail: Record<string, unknown>) => void;
+
+let logFn: LogFn = () => {};
+
+export function setProviderLogger(log: LogFn): void {
+  logFn = log;
+}
+
+/**
+ * Shared across providers so chat, collection, and scheduled runs together stay
+ * within `ai.maxConcurrentRuns` (FR-REL-5).
+ */
+const limiter = new RunLimiter(2);
 
 export interface Summary {
   keypoints: string[];
@@ -77,26 +94,46 @@ function parseSummary(out: string, fallbackTitle: string): Summary {
   };
 }
 
+/** Per-invocation limits taken from the AI config (FR-REL-1, FR-REL-3, FR-REL-5). */
+export interface RunLimits {
+  timeoutMs: number;
+  maxOutputBytes: number;
+}
+
 /**
- * Spawn a CLI, feed the prompt on stdin, and collect stdout. `cwd` (the notes
- * directory) lets the agent's own file tools search/read the note corpus so it
- * can answer from all notes (FR-FILE-6).
+ * Run a CLI backend through the hardened runner: bounded in time, capped in
+ * output, contained against spawn/stdin failures, and queued behind the shared
+ * concurrency limiter (FR-REL-1..3, FR-REL-5). `cwd` (the notes directory) lets
+ * the agent's own file tools search/read the note corpus (FR-FILE-6).
  */
-function runCli(command: string, args: string[], prompt: string, cwd?: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], cwd });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => (stdout += d.toString()));
-    child.stderr.on('data', (d) => (stderr += d.toString()));
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) resolve(stdout);
-      else reject(new Error(`${command} exited ${code}: ${stderr.slice(0, 500)}`));
-    });
-    child.stdin.write(prompt);
-    child.stdin.end();
+async function runBackend(
+  command: string,
+  args: string[],
+  prompt: string,
+  cwd: string | undefined,
+  limits: RunLimits
+): Promise<string> {
+  const started = Date.now();
+  const result = await limiter.run(
+    () =>
+      runCli({
+        command,
+        args,
+        prompt,
+        cwd,
+        timeoutMs: limits.timeoutMs,
+        maxOutputBytes: limits.maxOutputBytes,
+        log: logFn
+      }),
+    limits.timeoutMs
+  );
+  logFn('AI backend invocation finished', {
+    command: [command, ...args].join(' '),
+    durationMs: Date.now() - started,
+    truncated: result.truncated,
+    bytes: result.stdout.length
   });
+  return result.stdout;
 }
 
 /** Local, dependency-free heuristic (local-first, FR-AI-5 fallback). */
@@ -147,6 +184,7 @@ abstract class RemoteProvider implements AiProvider {
   abstract readonly type: AiBackendType;
   constructor(
     protected readonly lang: string,
+    protected readonly limits: RunLimits,
     protected readonly notesDir?: string
   ) {}
 
@@ -156,7 +194,13 @@ abstract class RemoteProvider implements AiProvider {
   async summarize(title: string, text: string): Promise<Summary> {
     try {
       return parseSummary(await this.complete(PROMPT(title, text, this.lang)), title);
-    } catch {
+    } catch (err) {
+      // Degrade to the local heuristic (FR-AI-5) but never silently: the cause
+      // must be visible in the log (FR-REL-6).
+      logFn('AI summarization failed; using the local heuristic', {
+        backend: this.type,
+        error: errorText(err)
+      });
       return new LocalProvider().summarize(title, text);
     }
   }
@@ -164,37 +208,53 @@ abstract class RemoteProvider implements AiProvider {
   async execute(instruction: string, context: string): Promise<string> {
     try {
       return (await this.complete(INSTRUCTION_PROMPT(instruction, context, this.lang))).trim();
-    } catch {
-      return new LocalProvider().execute(instruction, context);
+    } catch (err) {
+      logFn('AI task execution failed; using the local heuristic', {
+        backend: this.type,
+        error: errorText(err)
+      });
+      const fallback = await new LocalProvider().execute(instruction, context);
+      return `> ⚠️ The ${this.type} backend failed: ${errorText(err)}\n\n${fallback}`;
     }
   }
 
   async chat(messages: ChatMessage[]): Promise<string> {
     try {
-      return (await this.complete(CHAT_PROMPT(messages, this.lang))).trim();
+      const reply = (await this.complete(CHAT_PROMPT(messages, this.lang))).trim();
+      return reply || `⚠️ The ${this.type} backend returned an empty response.`;
     } catch (err) {
-      return `⚠️ The ${this.type} backend is unavailable (${
-        err instanceof Error ? err.message : String(err)
-      }).`;
+      logFn('AI chat failed', { backend: this.type, error: errorText(err) });
+      return `⚠️ ${errorText(err)}`;
     }
   }
+}
+
+function errorText(err: unknown): string {
+  if (err instanceof BackendError) return err.message;
+  return err instanceof Error ? err.message : String(err);
 }
 
 /** agent-cli backend (https://github.com/aquaxis/agent-cli). */
 export class AgentCliProvider extends RemoteProvider {
   readonly type = 'agent-cli' as const;
-  constructor(private readonly s: AiBackendSettings, lang: string, notesDir?: string) {
-    super(lang, notesDir);
+  constructor(
+    private readonly s: AiBackendSettings,
+    lang: string,
+    limits: RunLimits,
+    notesDir?: string
+  ) {
+    super(lang, limits, notesDir);
   }
   protected async complete(prompt: string): Promise<string> {
     // agent-cli `run` is a REPL that reads stdin line by line, so the prompt is
     // flattened to a single line (with a trailing newline to submit it).
     const oneLine = prompt.replace(/\s*\n\s*/g, ' ').trim();
-    const raw = await runCli(
+    const raw = await runBackend(
       this.s.command ?? 'agent-cli',
       this.s.args ?? ['run', '--auto-approve-tools'],
       `${oneLine}\n`,
-      this.notesDir
+      this.notesDir,
+      this.limits
     );
     return cleanAgentCliOutput(raw);
   }
@@ -221,11 +281,22 @@ function cleanAgentCliOutput(raw: string): string {
 /** Claude Code CLI backend, invoked in print/headless mode. */
 export class ClaudeCodeProvider extends RemoteProvider {
   readonly type = 'claude-code' as const;
-  constructor(private readonly s: AiBackendSettings, lang: string, notesDir?: string) {
-    super(lang, notesDir);
+  constructor(
+    private readonly s: AiBackendSettings,
+    lang: string,
+    limits: RunLimits,
+    notesDir?: string
+  ) {
+    super(lang, limits, notesDir);
   }
   protected complete(prompt: string): Promise<string> {
-    return runCli(this.s.command ?? 'claude', this.s.args ?? ['-p'], prompt, this.notesDir);
+    return runBackend(
+      this.s.command ?? 'claude',
+      this.s.args ?? ['-p'],
+      prompt,
+      this.notesDir,
+      this.limits
+    );
   }
 }
 
@@ -238,12 +309,27 @@ export class ClaudeCodeProvider extends RemoteProvider {
 export function createProvider(config: AiConfig, notesDir?: string): AiProvider {
   const s = config.backends[config.type] ?? {};
   const lang = config.outputLanguage ?? 'en';
+  const limits: RunLimits = {
+    timeoutMs: config.timeoutMs,
+    maxOutputBytes: config.maxOutputBytes
+  };
+  limiter.setLimit(config.maxConcurrentRuns);
   switch (config.type) {
     case 'agent-cli':
-      return new AgentCliProvider(s, lang, notesDir);
+      return new AgentCliProvider(s, lang, limits, notesDir);
     case 'claude-code':
-      return new ClaudeCodeProvider(s, lang, notesDir);
+      return new ClaudeCodeProvider(s, lang, limits, notesDir);
     default:
       return new LocalProvider();
   }
+}
+
+/**
+ * Whether the command backing a backend is present on PATH (FR-REL-6): the
+ * Settings page reports a missing backend instead of failing per message.
+ */
+export function backendAvailable(config: AiConfig, type: AiBackendType): boolean {
+  if (type === 'local') return true;
+  const defaults: Record<string, string> = { 'agent-cli': 'agent-cli', 'claude-code': 'claude' };
+  return commandExists(config.backends[type]?.command ?? defaults[type] ?? '');
 }

@@ -3,6 +3,9 @@
   "ai": {
     "type": "agent-cli",
     "outputLanguage": "ja",
+    "timeoutMs": 120000,
+    "maxOutputBytes": 2000000,
+    "maxConcurrentRuns": 2,
     "backends": {
       "agent-cli": { "command": "agent-cli", "args": ["run", "--auto-approve-tools"], "model": null },
       "claude-code": { "command": "claude", "args": ["-p"], "model": null }

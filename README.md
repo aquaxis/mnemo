@@ -91,6 +91,9 @@ On first run, `data/` is seeded from `templates/`. Edit `data/config.json`:
   "ai": {
     "type": "agent-cli",
     "outputLanguage": "ja",
+    "timeoutMs": 120000,
+    "maxOutputBytes": 2000000,
+    "maxConcurrentRuns": 2,
     "backends": {
       "agent-cli": { "command": "agent-cli", "args": ["run", "--auto-approve-tools"] },
       "claude-code": { "command": "claude", "args": ["-p"] }
@@ -114,6 +117,40 @@ search and read all your notes to answer.
 If the selected backend is unavailable, Mnemo falls back to the local heuristic
 so collection never hard-fails.
 
+### Reliability settings
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `ai.timeoutMs` | `120000` | A backend that does not answer within this time is stopped and the failure is reported, so chat and tasks never hang. Also editable on the Settings page. |
+| `ai.maxOutputBytes` | `2000000` | Cap on the output collected from a backend, so a runaway CLI cannot exhaust memory. |
+| `ai.maxConcurrentRuns` | `2` | How many agent runs (chat, collection, scheduled tasks) may run at once; the rest queue. |
+
+### Logs
+
+Mnemo writes its log to `data/logs/mnemo.log` and prints only a startup line to
+the console. This is deliberate: on Linux/macOS, writing to a terminal is a
+*blocking* operation for Node, so a server started in a terminal that is later
+closed (or that stops draining, e.g. a dropped SSH session) would freeze —
+the process stays alive but stops answering requests. Logging to a file keeps
+the server running no matter what happens to the terminal.
+
+Set `MNEMO_LOG=stdout` (or `"logTarget": "stdout"` in `config.json`) to log to
+the console instead, e.g. during development.
+
+To keep Mnemo running after you close the terminal, start it detached:
+
+```bash
+nohup npm start >/dev/null 2>&1 &
+```
+
+### Troubleshooting: chat does not answer
+
+1. Open **Settings** — a backend whose command is missing is flagged there.
+2. Check `data/logs/mnemo.log`; every failed backend invocation is logged with
+   the command, exit status, duration, and error output.
+3. Chat replies now carry the reason (backend not found, timed out, busy), so a
+   failure is visible instead of silent.
+
 ## Data layout
 
 ```
@@ -124,6 +161,7 @@ data/
 │   └── collected/ # AI-collected notes
 ├── assets/        # binaries only (images / audio / video)
 ├── config.json
+├── logs/          # server log (mnemo.log)
 └── jobs/          # scheduled job definitions & run history
 ```
 

@@ -49,8 +49,14 @@ export function ChatView() {
     try {
       const { reply } = await api.chat(next);
       setMessages([...next, { role: 'assistant', content: reply }]);
-    } catch {
-      setMessages([...next, { role: 'assistant', content: '⚠️ Failed to reach the AI backend.' }]);
+    } catch (err) {
+      // Show what actually went wrong (missing backend, timeout, busy) rather
+      // than a generic message (FR-REL-6).
+      const detail = err instanceof Error ? err.message : String(err);
+      setMessages([
+        ...next,
+        { role: 'assistant', content: `⚠️ Failed to reach the AI backend: ${detail}` }
+      ]);
     } finally {
       setBusy(false);
     }

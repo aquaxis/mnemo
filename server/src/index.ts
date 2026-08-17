@@ -12,10 +12,16 @@ import {
   type AiBackendSettings,
   WEB_DIST_DIR
 } from './config.js';
+import { createLogStream } from './log.js';
 import { NoteStore } from './storage/notes.js';
 import { AssetStore } from './storage/assets.js';
 import { SearchService } from './search/index.js';
-import { createProvider, type ChatMessage } from './agent/provider.js';
+import {
+  backendAvailable,
+  createProvider,
+  setProviderLogger,
+  type ChatMessage
+} from './agent/provider.js';
 import { Collector } from './agent/collector.js';
 import { Scheduler } from './scheduler/scheduler.js';
 
@@ -32,7 +38,33 @@ const provider = createProvider(config.ai, notesDir);
 const collector = new Collector(notes, search, provider);
 const scheduler = new Scheduler(config.dataDir, collector);
 
-const app = Fastify({ logger: true });
+// Log to a file by default: writing to an inherited terminal or pipe is
+// synchronous on POSIX, so a closed/stalled terminal would block the event loop
+// and take the whole server down (FR-REL-4, NFR-7). See log.ts.
+const app = Fastify({ logger: { stream: createLogStream(config) } });
+setProviderLogger((message, detail) => app.log.warn(detail, message));
+
+// A dead stdout/stderr (closed terminal) must not raise an uncaught error.
+process.stdout.on('error', () => {});
+process.stderr.on('error', () => {});
+
+// The server keeps serving through unexpected faults; a single bad request or a
+// misbehaving AI backend may not end the process (FR-REL-4).
+process.on('uncaughtException', (err) => {
+  app.log.error({ err: serializeError(err) }, 'Uncaught exception (server kept running)');
+});
+process.on('unhandledRejection', (reason) => {
+  app.log.error({ err: serializeError(reason) }, 'Unhandled rejection (server kept running)');
+});
+
+// Any route that throws returns JSON instead of leaving the client waiting.
+app.setErrorHandler((err, _req, reply) => {
+  app.log.error({ err: serializeError(err) }, 'Request failed');
+  reply.code(err.statusCode && err.statusCode >= 400 ? err.statusCode : 500).send({
+    error: err.message || 'Internal server error'
+  });
+});
+
 await app.register(fastifyMultipart);
 
 // --- Serve binary assets and (in production) the built web app --------------
@@ -49,6 +81,16 @@ if (existsSync(WEB_DIST_DIR)) {
 }
 
 const now = () => new Date().toISOString();
+
+function serializeError(err: unknown): { message: string; stack?: string } {
+  return err instanceof Error
+    ? { message: err.message, stack: err.stack }
+    : { message: String(err) };
+}
+
+/** Availability of each selectable backend's command on PATH (FR-REL-6). */
+const backendAvailability = () =>
+  Object.fromEntries(AI_BACKENDS.map((b) => [b, backendAvailable(config.ai, b)]));
 
 // --- Categories -------------------------------------------------------------
 app.get('/api/categories', async () => ({ categories: notes.listCategories() }));
@@ -135,7 +177,8 @@ app.post<{ Body: { messages: ChatMessage[]; id?: string; title?: string } }>(
 // --- AI backend selection (FR-AI-1, FR-AI-2) --------------------------------
 app.get('/api/ai/backends', async () => ({
   backends: AI_BACKENDS,
-  selected: collector.providerType
+  selected: collector.providerType,
+  available: backendAvailability()
 }));
 app.put<{ Body: { type: AiBackendType } }>('/api/ai/backend', async (req, reply) => {
   const type = req.body?.type;
@@ -151,22 +194,25 @@ app.put<{ Body: { type: AiBackendType } }>('/api/ai/backend', async (req, reply)
 app.get('/api/settings', async () => ({
   backends: AI_BACKENDS,
   ai: config.ai,
-  port: config.port
+  port: config.port,
+  available: backendAvailability(),
+  logFile: config.logTarget === 'file' ? config.logFile : null
 }));
 app.put<{
   Body: {
     type?: AiBackendType;
     outputLanguage?: string;
     backends?: Record<string, AiBackendSettings>;
+    timeoutMs?: number;
   };
 }>('/api/settings', async (req, reply) => {
-  const { type, outputLanguage, backends } = req.body ?? {};
+  const { type, outputLanguage, backends, timeoutMs } = req.body ?? {};
   if (type && !AI_BACKENDS.includes(type)) {
     return reply.code(400).send({ error: 'Unknown backend', backends: AI_BACKENDS });
   }
-  config = saveSettings(config.dataDir, { type, outputLanguage, backends });
+  config = saveSettings(config.dataDir, { type, outputLanguage, backends, timeoutMs });
   collector.setProvider(createProvider(config.ai, notesDir));
-  return { ai: config.ai, selected: collector.providerType };
+  return { ai: config.ai, selected: collector.providerType, available: backendAvailability() };
 });
 
 // --- Scheduled jobs ---------------------------------------------------------
@@ -208,5 +254,22 @@ app.setNotFoundHandler((req, reply) => {
 scheduler.start();
 
 app.listen({ port: config.port, host: '0.0.0.0' }).then(() => {
-  app.log.info(`Mnemo running on http://localhost:${config.port} (data: ${config.dataDir})`);
+  const url = `http://localhost:${config.port}`;
+  app.log.info(`Mnemo running on ${url} (data: ${config.dataDir})`);
+  if (!backendAvailable(config.ai, config.ai.type)) {
+    app.log.warn(
+      { backend: config.ai.type, command: config.ai.backends[config.ai.type]?.command },
+      'The configured AI backend command was not found on PATH; chat and agent tasks will report it'
+    );
+  }
+  // One console line so the terminal still shows where Mnemo is; guarded, since
+  // the terminal may already be gone (FR-REL-4).
+  try {
+    process.stdout.write(
+      `Mnemo running on ${url}\n  data: ${config.dataDir}\n` +
+        (config.logTarget === 'file' ? `  log:  ${config.logFile}\n` : '')
+    );
+  } catch {
+    // Never let a dead terminal affect startup.
+  }
 });
