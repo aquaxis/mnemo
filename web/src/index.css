@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* shadcn-style HSL variables consumed by the codemirror-live-markdown theme
+   (matches the reference demo). Without these the theme uses built-in fallbacks. */
+:root {
+  --foreground: 0 0% 3.9%;
+  --primary: 221.2 83.2% 53.3%;
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+  --border: 214.3 31.8% 91.4%;
+  --md-heading: var(--foreground);
+  --md-bold: var(--foreground);
+  --md-italic: var(--foreground);
+  --md-link: var(--primary);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: hsl(222 47% 11%);
+}
+
+/* CodeMirror live editor sizing (font-family is set by the editor theme). */
+.cm-editor {
+  height: 100%;
+}
+.cm-editor .cm-scroller {
+  overflow: auto;
+}
+
+/* List markers: codemirror-live-markdown hides the raw list marker (dash,
+   asterisk, or number) but draws none of its own, so we render one on
+   inactive list lines. */
+.cm-md-li-bullet::before {
+  content: '•';
+  color: hsl(var(--muted-foreground, 215 16% 47%));
+  margin-right: 0.4em;
+}
+.cm-md-li-ordered::before {
+  content: attr(data-num);
+  color: hsl(var(--muted-foreground, 215 16% 47%));
+  margin-right: 0.4em;
+}

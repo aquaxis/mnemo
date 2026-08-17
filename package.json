@@ -1,0 +1,31 @@
+{
+  "name": "mnemo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mnemo — an integrated, Markdown-based knowledge database (memory & knowledge archive).",
+  "type": "module",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace web",
+    "build:web": "npm run build --workspace web",
+    "start": "npm run build:web && npm run start --workspace server",
+    "dev:server": "npm run dev --workspace server",
+    "dev:web": "npm run dev --workspace web",
+    "dev": "npm run dev:server & npm run dev:web",
+    "lint": "eslint .",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.9.0",
+    "eslint": "^9.9.0",
+    "prettier": "^3.3.3",
+    "typescript-eslint": "^8.2.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

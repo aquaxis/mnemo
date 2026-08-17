@@ -1,0 +1,11 @@
+{
+  "port": 3000,
+  "ai": {
+    "type": "agent-cli",
+    "outputLanguage": "ja",
+    "backends": {
+      "agent-cli": { "command": "agent-cli", "args": ["run", "--auto-approve-tools"], "model": null },
+      "claude-code": { "command": "claude", "args": ["-p"], "model": null }
+    }
+  }
+}

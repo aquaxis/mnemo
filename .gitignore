@@ -1,0 +1,18 @@
+# Local tooling / project-management scaffolding (not part of the app)
+.aiprj
+AI_LOG/
+AI_PRJ_REQUIREMENTS.md
+AI_PRJ_DESIGN.md
+AI_PRJ_TASKS.md
+.claude/
+.agent-cli/
+.mcp.json
+
+# Node / build
+node_modules/
+dist/
+*.log
+.env
+
+# Runtime data (generated; seeded from templates/)
+data/
