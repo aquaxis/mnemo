@@ -163,8 +163,18 @@ data/
 ├── assets/        # binaries only (images / audio / video)
 ├── config.json
 ├── logs/          # server log (mnemo.log)
+├── scripts/       # scripts & working files produced by tasks
 └── jobs/          # scheduled job definitions & run history
 ```
+
+`notes/` holds knowledge as Markdown only. When a task needs a helper script or
+another generated file, the agent writes it to `scripts/` — the agent runs in
+the data directory, reads `notes/` to search your knowledge, and keeps its own
+working files out of it.
+
+Upgrading from an earlier version: files an agent wrote under `data/notes/`
+(e.g. `data/notes/scripts/`) stay where they are — nothing is deleted for you.
+Move them to `data/scripts/` if you want them out of the note list.
 
 ## Tech stack
 

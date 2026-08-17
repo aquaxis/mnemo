@@ -124,7 +124,10 @@ function ensureLayout(dataDir: string): void {
     join(dataDir, 'assets', 'audio'),
     join(dataDir, 'assets', 'video'),
     join(dataDir, 'jobs'),
-    join(dataDir, 'logs')
+    join(dataDir, 'logs'),
+    // Scripts and working files produced by task runs, kept out of notes/
+    // (FR-FILE-7, FR-CRON-8).
+    join(dataDir, 'scripts')
   ]) {
     mkdirSync(dir, { recursive: true });
   }

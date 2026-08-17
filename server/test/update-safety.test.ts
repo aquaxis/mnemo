@@ -96,6 +96,40 @@ test('new default config keys are filled without discarding user values (FR-INST
   rmSync(dataDir, { recursive: true, force: true });
 });
 
+/**
+ * Scripts a task produces must land in their own directory, not among the
+ * Markdown knowledge (FR-FILE-7, FR-CRON-8). Two things make that true: the
+ * layout provides `data/scripts/`, and the CLI agent is spawned in the data
+ * root — spawning it inside `notes/` is what previously produced
+ * `data/notes/scripts/weather_fetch.sh` on a real installation.
+ */
+test('the layout provides a scripts directory outside notes/ (FR-FILE-7)', async () => {
+  const dataDir = newDataDir();
+  const { loadConfig } = await loadConfigModule(dataDir);
+  loadConfig();
+
+  assert.ok(existsSync(join(dataDir, 'scripts')), 'data/scripts/ is created');
+  assert.ok(!existsSync(join(dataDir, 'notes', 'scripts')), 'and not inside notes/');
+  rmSync(dataDir, { recursive: true, force: true });
+});
+
+test('the AI agent is spawned in the data root, not in notes/ (FR-FILE-7)', () => {
+  const server = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+  const provider = readFileSync(new URL('../src/agent/provider.ts', import.meta.url), 'utf8');
+
+  assert.match(
+    server,
+    /const agentWorkDir = config\.dataDir/,
+    'the working directory is the data root'
+  );
+  assert.doesNotMatch(
+    server,
+    /createProvider\(config\.ai, notesDir\)/,
+    'the agent is no longer spawned inside notes/'
+  );
+  assert.match(provider, /never under "scripts\/"|never under "notes\/"/, 'the prompt states where generated files go');
+});
+
 test('install.sh never lists data/ or node_modules/ among updated paths (NFR-1b)', () => {
   const script = readFileSync(new URL('../../install.sh', import.meta.url), 'utf8');
   const paths = /SOURCE_PATHS="([\s\S]*?)"/.exec(script);

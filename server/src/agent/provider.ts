@@ -56,6 +56,22 @@ function languageName(lang: string): string {
   return LANGUAGE_NAMES[lang] ?? lang;
 }
 
+/**
+ * Where the agent may read and write. The CLI runs in the data directory root,
+ * so `notes/` is the Markdown knowledge base it can search (FR-FILE-6) and
+ * `scripts/` is where any generated file belongs — never among the notes
+ * (FR-FILE-7, FR-CRON-8).
+ */
+const WORKSPACE_RULES =
+  `Your working directory is Mnemo's data directory. It contains:\n` +
+  `- "notes/" — the user's knowledge as Markdown files, one subfolder per ` +
+  `category. Search and read here when the question is about the user's notes; ` +
+  `write nothing here except Markdown notes.\n` +
+  `- "scripts/" — put any script, fetch command or other generated working file ` +
+  `you create HERE, never under "notes/".\n` +
+  `- "assets/", "jobs/", "logs/" — Mnemo's own storage. Ignore them; do not ` +
+  `read or search them.\n`;
+
 const PROMPT = (title: string, text: string, lang: string) =>
   `Summarize the following web page titled "${title}". ` +
   `Return 3-5 concise key points as a Markdown bullet list ("- "), ` +
@@ -91,15 +107,18 @@ const CHAT_PROMPT = (messages: ChatMessage[], lang: string) =>
   `answer as unverified, possibly outdated knowledge.\n` +
   `Skip the research only for small talk or questions purely about this ` +
   `conversation or the user's own notes.\n` +
-  `The user's notes are Markdown files under the current working directory ` +
-  `(subfolders per category); you may search and read them to answer (FR-FILE-6).\n\n` +
+  WORKSPACE_RULES +
+  `\n` +
   messages.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n') +
   `\nAssistant:`;
 
 /** Prompt for executing an arbitrary agent task instruction (FR-CRON-7). */
 const INSTRUCTION_PROMPT = (instruction: string, context: string, lang: string) =>
   `You are an AI agent. Perform the following task and return the result as ` +
-  `Markdown. Write the result in ${languageName(lang)}.\n\n` +
+  `Markdown. Write the result in ${languageName(lang)}.\n` +
+  WORKSPACE_RULES +
+  `Return the result as your answer — Mnemo saves it as a note itself, so do ` +
+  `not write the report into "notes/" yourself.\n\n` +
   `Task:\n${instruction}\n` +
   (context
     ? `\nYou may use the following collected source material as context:\n\n${context.slice(0, 12000)}\n`
@@ -131,8 +150,9 @@ export interface RunLimits {
 /**
  * Run a CLI backend through the hardened runner: bounded in time, capped in
  * output, contained against spawn/stdin failures, and queued behind the shared
- * concurrency limiter (FR-REL-1..3, FR-REL-5). `cwd` (the notes directory) lets
- * the agent's own file tools search/read the note corpus (FR-FILE-6).
+ * concurrency limiter (FR-REL-1..3, FR-REL-5). `cwd` (the data directory root)
+ * lets the agent's own file tools search/read `notes/` (FR-FILE-6) while
+ * generated files go to `scripts/` (FR-FILE-7).
  */
 async function runBackend(
   command: string,
@@ -207,15 +227,16 @@ export class LocalProvider implements AiProvider {
 /**
  * Base for real AI backends. Subclasses implement the transport `complete()`;
  * `summarize`/`execute`/`chat` are built on top and fall back to the local
- * heuristic if the backend throws (FR-AI-5). `notesDir` is the working directory
- * given to the CLI so the agent can search/read all notes (FR-FILE-6).
+ * heuristic if the backend throws (FR-AI-5). `workDir` is the data directory
+ * root, given to the CLI as its working directory: the agent searches `notes/`
+ * from there (FR-FILE-6) and writes generated files to `scripts/` (FR-FILE-7).
  */
 abstract class RemoteProvider implements AiProvider {
   abstract readonly type: AiBackendType;
   constructor(
     protected readonly lang: string,
     protected readonly limits: RunLimits,
-    protected readonly notesDir?: string
+    protected readonly workDir?: string
   ) {}
 
   /** Send a prompt to the backend and return its raw text output. */
@@ -271,9 +292,9 @@ export class AgentCliProvider extends RemoteProvider {
     private readonly s: AiBackendSettings,
     lang: string,
     limits: RunLimits,
-    notesDir?: string
+    workDir?: string
   ) {
-    super(lang, limits, notesDir);
+    super(lang, limits, workDir);
   }
   protected async complete(prompt: string, signal?: AbortSignal): Promise<string> {
     // agent-cli `run` is a REPL that reads stdin line by line, so the prompt is
@@ -283,7 +304,7 @@ export class AgentCliProvider extends RemoteProvider {
       this.s.command ?? 'agent-cli',
       this.s.args ?? ['run', '--auto-approve-tools'],
       `${oneLine}\n`,
-      this.notesDir,
+      this.workDir,
       this.limits,
       signal
     );
@@ -316,16 +337,16 @@ export class ClaudeCodeProvider extends RemoteProvider {
     private readonly s: AiBackendSettings,
     lang: string,
     limits: RunLimits,
-    notesDir?: string
+    workDir?: string
   ) {
-    super(lang, limits, notesDir);
+    super(lang, limits, workDir);
   }
   protected complete(prompt: string, signal?: AbortSignal): Promise<string> {
     return runBackend(
       this.s.command ?? 'claude',
       this.s.args ?? ['-p'],
       prompt,
-      this.notesDir,
+      this.workDir,
       this.limits,
       signal
     );
@@ -335,10 +356,11 @@ export class ClaudeCodeProvider extends RemoteProvider {
 /**
  * Instantiate the provider selected by config.ai.type (FR-AI-1, FR-AI-2).
  * Selectable backends are agent-cli and Claude Code; `local` is the internal
- * fallback. The Claude API is not a backend (C-11 / FR-AI-6). `notesDir` gives
- * the CLI agents access to the note corpus for search (FR-FILE-6).
+ * fallback. The Claude API is not a backend (C-11 / FR-AI-6). `workDir` is the
+ * data directory root: CLI agents search `notes/` from there (FR-FILE-6) and
+ * write any generated file to `scripts/` (FR-FILE-7).
  */
-export function createProvider(config: AiConfig, notesDir?: string): AiProvider {
+export function createProvider(config: AiConfig, workDir?: string): AiProvider {
   const s = config.backends[config.type] ?? {};
   const lang = config.outputLanguage ?? 'en';
   const limits: RunLimits = {
@@ -348,9 +370,9 @@ export function createProvider(config: AiConfig, notesDir?: string): AiProvider 
   limiter.setLimit(config.maxConcurrentRuns);
   switch (config.type) {
     case 'agent-cli':
-      return new AgentCliProvider(s, lang, limits, notesDir);
+      return new AgentCliProvider(s, lang, limits, workDir);
     case 'claude-code':
-      return new ClaudeCodeProvider(s, lang, limits, notesDir);
+      return new ClaudeCodeProvider(s, lang, limits, workDir);
     default:
       return new LocalProvider();
   }

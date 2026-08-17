@@ -28,14 +28,16 @@ import { Scheduler } from './scheduler/scheduler.js';
 
 let config = loadConfig();
 
-// The notes directory is given to the CLI agents as their working directory so
-// they can search/read the full note corpus (FR-FILE-6).
-const notesDir = join(config.dataDir, 'notes');
+// CLI agents are spawned in the data root, not in notes/: from here they read
+// notes/ to search the whole corpus (FR-FILE-6), while any file they create
+// belongs in scripts/ rather than among the Markdown knowledge (FR-FILE-7,
+// FR-CRON-8).
+const agentWorkDir = config.dataDir;
 
 const notes = new NoteStore(config.dataDir);
 const assets = new AssetStore(config.dataDir);
 const search = new SearchService(notes);
-const provider = createProvider(config.ai, notesDir);
+const provider = createProvider(config.ai, agentWorkDir);
 const collector = new Collector(notes, search, provider);
 const scheduler = new Scheduler(config.dataDir, collector);
 
@@ -244,7 +246,7 @@ app.put<{ Body: { type: AiBackendType } }>('/api/ai/backend', async (req, reply)
     return reply.code(400).send({ error: 'Unknown backend', backends: AI_BACKENDS });
   }
   config = saveSettings(config.dataDir, { type });
-  collector.setProvider(createProvider(config.ai, notesDir));
+  collector.setProvider(createProvider(config.ai, agentWorkDir));
   return { selected: collector.providerType };
 });
 
@@ -269,7 +271,7 @@ app.put<{
     return reply.code(400).send({ error: 'Unknown backend', backends: AI_BACKENDS });
   }
   config = saveSettings(config.dataDir, { type, outputLanguage, backends, timeoutMs });
-  collector.setProvider(createProvider(config.ai, notesDir));
+  collector.setProvider(createProvider(config.ai, agentWorkDir));
   return { ai: config.ai, selected: collector.providerType, available: backendAvailability() };
 });
 
