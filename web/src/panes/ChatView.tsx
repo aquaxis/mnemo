@@ -6,8 +6,12 @@ export function ChatView() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
   const [saveStatus, setSaveStatus] = useState('');
   const endRef = useRef<HTMLDivElement | null>(null);
+  // Lets the user cancel a slow reply; aborting also stops the agent run on the
+  // server, so it does not keep holding a concurrency slot.
+  const abortRef = useRef<AbortController | null>(null);
   // The note id backing this conversation (held in a ref so debounced saves use
   // the latest id and update in place instead of duplicating).
   const savedIdRef = useRef<string | undefined>(undefined);
@@ -16,6 +20,18 @@ export function ChatView() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, busy]);
+
+  // Count the seconds while waiting: a slow backend should look slow, not stuck.
+  useEffect(() => {
+    if (!busy) return;
+    setElapsed(0);
+    const started = Date.now();
+    const id = window.setInterval(
+      () => setElapsed(Math.floor((Date.now() - started) / 1000)),
+      1000
+    );
+    return () => window.clearInterval(id);
+  }, [busy]);
 
   // Auto-save after each completed exchange (last message from the assistant),
   // debounced, updating the same note in place (FR-CHAT-4).
@@ -46,20 +62,31 @@ export function ChatView() {
     setMessages(next);
     setInput('');
     setBusy(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const { reply } = await api.chat(next);
+      const { reply } = await api.chat(next, controller.signal);
       setMessages([...next, { role: 'assistant', content: reply }]);
     } catch (err) {
-      // Show what actually went wrong (missing backend, timeout, busy) rather
-      // than a generic message (FR-REL-6).
-      const detail = err instanceof Error ? err.message : String(err);
-      setMessages([
-        ...next,
-        { role: 'assistant', content: `⚠️ Failed to reach the AI backend: ${detail}` }
-      ]);
+      if (controller.signal.aborted) {
+        setMessages([...next, { role: 'assistant', content: '⏹ Cancelled.' }]);
+      } else {
+        // Show what actually went wrong (missing backend, timeout, busy) rather
+        // than a generic message (FR-REL-6).
+        const detail = err instanceof Error ? err.message : String(err);
+        setMessages([
+          ...next,
+          { role: 'assistant', content: `⚠️ Failed to reach the AI backend: ${detail}` }
+        ]);
+      }
     } finally {
+      abortRef.current = null;
       setBusy(false);
     }
+  }
+
+  function cancel() {
+    abortRef.current?.abort();
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -118,8 +145,16 @@ export function ChatView() {
             </div>
           ))}
           {busy && (
-            <div className="self-start rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-gray-400">
-              …
+            <div className="flex items-center gap-3 self-start rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-gray-500">
+              <span>
+                Thinking… {elapsed}s
+                {elapsed >= 20 && (
+                  <span className="text-gray-400"> — the AI agent is still working</span>
+                )}
+              </span>
+              <button className="text-xs underline hover:text-gray-700" onClick={cancel}>
+                Cancel
+              </button>
             </div>
           )}
           <div ref={endRef} />

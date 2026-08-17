@@ -43,9 +43,9 @@ export class Collector {
     return this.provider.type;
   }
 
-  /** Chat with the active AI agent (FR-CHAT). */
-  chat(messages: ChatMessage[]): Promise<string> {
-    return this.provider.chat(messages);
+  /** Chat with the active AI agent; `signal` cancels the run (FR-CHAT, FR-CHAT-7). */
+  chat(messages: ChatMessage[], signal?: AbortSignal): Promise<string> {
+    return this.provider.chat(messages, signal);
   }
 
   async collect(params: CollectParams, now: string): Promise<CollectOutcome> {

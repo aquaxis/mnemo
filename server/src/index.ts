@@ -150,8 +150,19 @@ app.post<{ Body: { sources: string[]; category?: string } }>('/api/agent/collect
 // --- AI agent chat (FR-CHAT) ------------------------------------------------
 app.post<{ Body: { messages: ChatMessage[] } }>('/api/chat', async (req) => {
   const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
-  const reply = await collector.chat(messages);
-  return { reply };
+  // Cancelling in the UI (or simply closing the tab) closes the request; stop
+  // the agent run instead of letting it hold a concurrency slot (FR-CHAT-7).
+  const controller = new AbortController();
+  let done = false;
+  req.raw.once('close', () => {
+    if (!done) controller.abort();
+  });
+  try {
+    const reply = await collector.chat(messages, controller.signal);
+    return { reply };
+  } finally {
+    done = true;
+  }
 });
 
 // Persist a conversation as a Markdown note under the `chats` category (FR-CHAT-4).
@@ -272,4 +283,20 @@ app.listen({ port: config.port, host: '0.0.0.0' }).then(() => {
   } catch {
     // Never let a dead terminal affect startup.
   }
+}).catch((err: NodeJS.ErrnoException) => {
+  // Startup failures must be visible on the console too: with the log going to
+  // a file, an unreported failure would look like the server exiting silently.
+  app.log.error({ err: serializeError(err) }, 'Mnemo failed to start');
+  const hint =
+    err.code === 'EADDRINUSE'
+      ? `Port ${config.port} is already in use — another Mnemo instance is probably still running.\n` +
+        `Find it with:  ss -ltnp | grep :${config.port}\n` +
+        `Stop it with:  kill -9 <pid>   (a frozen process ignores a plain kill)\n`
+      : '';
+  try {
+    process.stderr.write(`Mnemo failed to start: ${err.message}\n${hint}`);
+  } catch {
+    // The terminal may be gone; the log file has the details either way.
+  }
+  process.exit(1);
 });

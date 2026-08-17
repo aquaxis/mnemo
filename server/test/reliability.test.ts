@@ -91,6 +91,29 @@ test('runaway output is capped instead of exhausting memory (FR-REL-3)', async (
   assert.ok(result.stdout.length < 2000000, `output stayed bounded (${result.stdout.length} bytes)`);
 });
 
+test('a cancelled request stops the backend run (FR-CHAT-7)', async () => {
+  const controller = new AbortController();
+  const started = Date.now();
+  const pending = runCli({
+    command: process.execPath,
+    args: ['-e', 'setInterval(() => {}, 1000)'], // would run until the timeout
+    prompt: 'hello\n',
+    timeoutMs: 30000,
+    maxOutputBytes: LIMITS.maxOutputBytes,
+    signal: controller.signal
+  });
+  setTimeout(() => controller.abort(), 200);
+
+  const err = await pending.then(
+    () => null,
+    (e) => e as BackendError
+  );
+
+  assert.ok(err instanceof BackendError, 'the run rejects when cancelled');
+  assert.equal(err.reason, 'cancelled');
+  assert.ok(Date.now() - started < 5000, 'it stops at once, not at the timeout');
+});
+
 test('concurrent runs are limited and queued (FR-REL-5)', async () => {
   const limiter = new RunLimiter(1);
   const order: string[] = [];

@@ -35,8 +35,11 @@ export interface AiProvider {
   summarize(title: string, text: string): Promise<Summary>;
   /** Execute a natural-language task instruction, returning Markdown (FR-CRON-7). */
   execute(instruction: string, context: string): Promise<string>;
-  /** Hold a conversation with the AI agent, returning the reply (FR-CHAT). */
-  chat(messages: ChatMessage[]): Promise<string>;
+  /**
+   * Hold a conversation with the AI agent, returning the reply (FR-CHAT).
+   * `signal` aborts the run when the user cancels (FR-CHAT-7).
+   */
+  chat(messages: ChatMessage[], signal?: AbortSignal): Promise<string>;
 }
 
 const LANGUAGE_NAMES: Record<string, string> = {
@@ -111,7 +114,8 @@ async function runBackend(
   args: string[],
   prompt: string,
   cwd: string | undefined,
-  limits: RunLimits
+  limits: RunLimits,
+  signal?: AbortSignal
 ): Promise<string> {
   const started = Date.now();
   const result = await limiter.run(
@@ -123,7 +127,8 @@ async function runBackend(
         cwd,
         timeoutMs: limits.timeoutMs,
         maxOutputBytes: limits.maxOutputBytes,
-        log: logFn
+        log: logFn,
+        signal
       }),
     limits.timeoutMs
   );
@@ -189,7 +194,7 @@ abstract class RemoteProvider implements AiProvider {
   ) {}
 
   /** Send a prompt to the backend and return its raw text output. */
-  protected abstract complete(prompt: string): Promise<string>;
+  protected abstract complete(prompt: string, signal?: AbortSignal): Promise<string>;
 
   async summarize(title: string, text: string): Promise<Summary> {
     try {
@@ -218,9 +223,9 @@ abstract class RemoteProvider implements AiProvider {
     }
   }
 
-  async chat(messages: ChatMessage[]): Promise<string> {
+  async chat(messages: ChatMessage[], signal?: AbortSignal): Promise<string> {
     try {
-      const reply = (await this.complete(CHAT_PROMPT(messages, this.lang))).trim();
+      const reply = (await this.complete(CHAT_PROMPT(messages, this.lang), signal)).trim();
       return reply || `⚠️ The ${this.type} backend returned an empty response.`;
     } catch (err) {
       logFn('AI chat failed', { backend: this.type, error: errorText(err) });
@@ -245,7 +250,7 @@ export class AgentCliProvider extends RemoteProvider {
   ) {
     super(lang, limits, notesDir);
   }
-  protected async complete(prompt: string): Promise<string> {
+  protected async complete(prompt: string, signal?: AbortSignal): Promise<string> {
     // agent-cli `run` is a REPL that reads stdin line by line, so the prompt is
     // flattened to a single line (with a trailing newline to submit it).
     const oneLine = prompt.replace(/\s*\n\s*/g, ' ').trim();
@@ -254,7 +259,8 @@ export class AgentCliProvider extends RemoteProvider {
       this.s.args ?? ['run', '--auto-approve-tools'],
       `${oneLine}\n`,
       this.notesDir,
-      this.limits
+      this.limits,
+      signal
     );
     return cleanAgentCliOutput(raw);
   }
@@ -289,13 +295,14 @@ export class ClaudeCodeProvider extends RemoteProvider {
   ) {
     super(lang, limits, notesDir);
   }
-  protected complete(prompt: string): Promise<string> {
+  protected complete(prompt: string, signal?: AbortSignal): Promise<string> {
     return runBackend(
       this.s.command ?? 'claude',
       this.s.args ?? ['-p'],
       prompt,
       this.notesDir,
-      this.limits
+      this.limits,
+      signal
     );
   }
 }

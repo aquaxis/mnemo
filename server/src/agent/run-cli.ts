@@ -19,6 +19,8 @@ export interface RunCliOptions {
   maxOutputBytes: number;
   /** Diagnostics sink (FR-REL-6). */
   log?: (message: string, detail: Record<string, unknown>) => void;
+  /** Aborts the run — e.g. the user cancelled the chat (FR-CHAT-7). */
+  signal?: AbortSignal;
 }
 
 export interface RunCliResult {
@@ -32,7 +34,7 @@ export interface RunCliResult {
 export class BackendError extends Error {
   constructor(
     message: string,
-    readonly reason: 'not-found' | 'timeout' | 'exit' | 'io' | 'busy'
+    readonly reason: 'not-found' | 'timeout' | 'exit' | 'io' | 'busy' | 'cancelled'
   ) {
     super(message);
     this.name = 'BackendError';
@@ -54,8 +56,12 @@ export class BackendError extends Error {
  * - output is capped at `maxOutputBytes` so a runaway CLI cannot exhaust memory.
  */
 export function runCli(options: RunCliOptions): Promise<RunCliResult> {
-  const { command, args, prompt, cwd, timeoutMs, maxOutputBytes, log } = options;
+  const { command, args, prompt, cwd, timeoutMs, maxOutputBytes, log, signal } = options;
   const startedAt = Date.now();
+
+  if (signal?.aborted) {
+    return Promise.reject(new BackendError('The request was cancelled.', 'cancelled'));
+  }
 
   return new Promise<RunCliResult>((resolve, reject) => {
     let child: ChildProcessByStdio<Writable, Readable, Readable>;
@@ -77,6 +83,7 @@ export function runCli(options: RunCliOptions): Promise<RunCliResult> {
       settled = true;
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
+      signal?.removeEventListener('abort', onAbort);
       const durationMs = Date.now() - startedAt;
       if (err) {
         log?.('AI backend invocation failed', {
@@ -98,6 +105,14 @@ export function runCli(options: RunCliOptions): Promise<RunCliResult> {
       killTimer = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS);
       killTimer.unref?.();
     };
+
+    // The caller gave up (the user cancelled, or the browser disconnected):
+    // stop the child so it does not keep holding a concurrency slot (FR-CHAT-7).
+    const onAbort = () => {
+      stop();
+      finish(new BackendError('The request was cancelled.', 'cancelled'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     const collect = (buffer: 'out' | 'err', chunk: Buffer) => {
       if (truncated) return;

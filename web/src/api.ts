@@ -111,11 +111,12 @@ export const api = {
   search: (q: string) =>
     fetch(`/api/search?q=${encodeURIComponent(q)}`).then(json<{ notes: NoteMeta[] }>),
 
-  chat: (messages: ChatMessage[]) =>
+  chat: (messages: ChatMessage[], signal?: AbortSignal) =>
     fetch('/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ messages })
+      body: JSON.stringify({ messages }),
+      signal
     }).then(json<{ reply: string }>),
   saveChat: (messages: ChatMessage[], id?: string) =>
     fetch('/api/chat/save', {
