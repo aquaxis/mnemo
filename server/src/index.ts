@@ -225,7 +225,7 @@ app.post<{ Body: { messages: ChatMessage[]; id?: string; title?: string } }>(
     const body = messages
       .map((m) => `**${m.role === 'user' ? 'You' : 'AI'}:**\n\n${m.content}`)
       .join('\n\n---\n\n');
-    const input = { title, category: 'chats', tags: ['chat'], type: 'note' as const, body };
+    const input = { title, category: 'chats', body };
     const note = req.body.id
       ? notes.update(req.body.id, input, now())
       : notes.create(input, now());

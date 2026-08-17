@@ -4,12 +4,12 @@ import { LiveMarkdownEditor } from '../editor/LiveMarkdownEditor.js';
 
 export function NoteEditor(props: {
   noteId: string;
-  onSaved: () => void;
+  onSaved: (id: string) => void;
   onDeleted: () => void;
 }) {
   const [note, setNote] = useState<Note | null>(null);
+  // The title is the note's file name (FR-NOTE-7): editing it renames the file.
   const [title, setTitle] = useState('');
-  const [tags, setTags] = useState('');
   const [body, setBody] = useState('');
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -21,7 +21,6 @@ export function NoteEditor(props: {
       if (!active) return;
       setNote(n);
       setTitle(n.title);
-      setTags(n.tags.join(', '));
       setBody(n.body);
       setDirty(false);
     });
@@ -38,19 +37,17 @@ export function NoteEditor(props: {
     return () => {
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
     };
-  }, [title, tags, body, dirty]);
+  }, [title, body, dirty]);
 
   async function save() {
     if (!note) return;
     setSaving(true);
-    await api.updateNote(note.id, {
-      title,
-      body,
-      tags: tags.split(',').map((t) => t.trim()).filter(Boolean)
-    });
+    // Renaming changes the id (it is the file name), so keep the fresh note.
+    const saved = await api.updateNote(note.id, { title, body });
+    setNote(saved);
     setSaving(false);
     setDirty(false);
-    props.onSaved();
+    props.onSaved(saved.id);
   }
 
   async function remove() {
@@ -67,7 +64,7 @@ export function NoteEditor(props: {
         <input
           className="w-full text-lg font-semibold outline-none"
           value={title}
-          placeholder="Untitled"
+          placeholder="Note name"
           onChange={(e) => {
             setTitle(e.target.value);
             setDirty(true);
@@ -75,20 +72,9 @@ export function NoteEditor(props: {
         />
         <div className="mt-2 flex items-center gap-2 text-xs text-gray-500">
           <span className="rounded bg-muted px-2 py-0.5">{note.category}</span>
-          <input
-            className="flex-1 outline-none"
-            value={tags}
-            placeholder="tags, comma, separated"
-            onChange={(e) => {
-              setTags(e.target.value);
-              setDirty(true);
-            }}
-          />
-          {note.source && (
-            <a className="text-accent underline" href={note.source} target="_blank" rel="noreferrer">
-              source
-            </a>
-          )}
+          <span className="flex-1 truncate" title="The title is the file name">
+            {note.id}.md
+          </span>
           <span>{saving ? 'Saving…' : dirty ? 'Unsaved' : 'Saved'}</span>
           <button className="text-red-500 hover:underline" onClick={remove}>
             Delete

@@ -1,10 +1,12 @@
+/**
+ * Notes are plain Markdown; this metadata is derived from the file itself —
+ * `title` is the file name (FR-NOTE-7) and `updated` its modification time
+ * (FR-NOTE-8).
+ */
 export interface NoteMeta {
   id: string;
   title: string;
   category: string;
-  tags: string[];
-  source: string | null;
-  type: 'note' | 'collected';
   created: string;
   updated: string;
 }

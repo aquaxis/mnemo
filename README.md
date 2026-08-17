@@ -20,7 +20,7 @@ The name comes from **Mnemosyne**, the Greek goddess of memory.
 - **Selectable AI agent** — choose the backend: agent-cli or Claude Code (CLI). The Claude API is not used.
 - **Settings page** — pick the active AI backend, set the AI output language, and edit per-backend settings (command, args, model).
 - **Cron scheduling** — run recurring tasks by date/time or weekday; each task gives the AI agent an instruction to execute (the agent finds its own sources), not just a fixed crawl. Tasks can be created in the Scheduler view or straight from a chat.
-- **Markdown-first storage** — all knowledge as Markdown, organized into nested folders (categories); binaries stored separately.
+- **Markdown-first storage** — all knowledge as Markdown, organized into nested folders (categories); binaries stored separately. Notes are **plain Markdown with no frontmatter**: the file name is the note's title, its folder is the category, and its modification time decides how recently it changed — so the files are exactly as useful outside Mnemo as inside it.
 
 ## Requirements
 
@@ -112,8 +112,9 @@ the **Settings** page in the app:
 - `claude-code` — the Claude Code CLI (print mode). The Claude API is **not** used.
 - `local` — offline heuristic, no API or install required (internal fallback).
 
-The CLI agent runs with the notes directory as its working directory, so it can
-search and read all your notes to answer.
+The CLI agent runs with the data directory as its working directory, so it can
+search and read all your notes under `notes/` to answer, while writing anything
+it generates to `scripts/`.
 
 If the selected backend is unavailable, Mnemo falls back to the local heuristic
 so collection never hard-fails.
@@ -156,7 +157,7 @@ nohup npm start >/dev/null 2>&1 &
 
 ```
 data/
-├── notes/         # all Markdown, classified by category
+├── notes/         # all Markdown, classified by category; <title>.md, no frontmatter
 │   ├── inbox/
 │   ├── wiki/
 │   └── collected/ # AI-collected notes
@@ -166,6 +167,13 @@ data/
 ├── scripts/       # scripts & working files produced by tasks
 └── jobs/          # scheduled job definitions & run history
 ```
+
+A note is stored as `notes/<category>/<title>.md` containing only your Markdown —
+no `---` metadata block. Renaming a note in Mnemo renames the file, and the list
+is ordered by modification time, so editing a file in another editor is picked up
+too. Notes written by an earlier version still carry a frontmatter block: they
+open normally (the block is hidden), and it is dropped the first time you save
+that note — nothing is rewritten in bulk.
 
 `notes/` holds knowledge as Markdown only. When a task needs a helper script or
 another generated file, the agent writes it to `scripts/` — the agent runs in

@@ -108,7 +108,10 @@ export function App() {
   }, [loadNotes]);
 
   async function newNote() {
-    const note = await api.createNote({ title: 'Untitled', category, body: '' });
+    // The name becomes the file name and the list entry (FR-NOTE-7).
+    const name = window.prompt('Note name', 'Untitled')?.trim();
+    if (name === undefined) return;
+    const note = await api.createNote({ title: name || 'Untitled', category, body: '' });
     await loadNotes();
     setView('notes');
     setSelected(note.id);
@@ -232,12 +235,11 @@ export function App() {
                     }`}
                     onClick={() => setSelected(n.id)}
                   >
+                    {/* The file name is the note's identity (FR-NOTE-7), and
+                        the file's mtime its recency (FR-NOTE-8). */}
                     <div className="truncate font-medium">{n.title}</div>
                     <div className="mt-0.5 flex items-center gap-2 text-xs text-gray-500">
-                      <span>{new Date(n.updated).toLocaleDateString()}</span>
-                      {n.type === 'collected' && (
-                        <span className="rounded bg-accent/10 px-1 text-accent">collected</span>
-                      )}
+                      <span>{new Date(n.updated).toLocaleString()}</span>
                     </div>
                   </button>
                 ))}
@@ -255,7 +257,11 @@ export function App() {
             {selected ? (
               <NoteEditor
                 noteId={selected}
-                onSaved={loadNotes}
+                onSaved={(id) => {
+                  // Renaming changes the id; follow it so the selection holds.
+                  setSelected(id);
+                  void loadNotes();
+                }}
                 onDeleted={() => {
                   setSelected(null);
                   void loadNotes();

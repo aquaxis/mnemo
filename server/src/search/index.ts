@@ -4,7 +4,6 @@ import type { NoteStore, NoteMeta } from '../storage/notes.js';
 interface IndexedDoc {
   id: string;
   title: string;
-  tags: string;
   body: string;
 }
 
@@ -23,7 +22,7 @@ export class SearchService {
     const index = new FlexSearch.Document<IndexedDoc, true>({
       document: {
         id: 'id',
-        index: ['title', 'tags', 'body'],
+        index: ['title', 'body'],
         store: true
       },
       tokenize: 'forward'
@@ -31,12 +30,8 @@ export class SearchService {
     for (const note of this.notes.list()) {
       const full = this.notes.get(note.id);
       if (!full) continue;
-      index.add({
-        id: full.id,
-        title: full.title,
-        tags: full.tags.join(' '),
-        body: full.body
-      });
+      // The title is the file name (FR-NOTE-7); notes carry no tags any more.
+      index.add({ id: full.id, title: full.title, body: full.body });
     }
     return index;
   }

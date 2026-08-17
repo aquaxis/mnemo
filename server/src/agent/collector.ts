@@ -105,17 +105,7 @@ export class Collector {
       const body =
         `> AI task run on ${now}${sources.length ? ` · sources: ${sources.join(', ')}` : ''}\n\n` +
         `**Task:** ${instruction}\n\n---\n\n${output}\n`;
-      const created = this.notes.create(
-        {
-          title,
-          category,
-          tags: ['task'],
-          source: sources[0] ?? null,
-          type: 'collected',
-          body
-        } satisfies Partial<Note>,
-        now
-      );
+      const created = this.notes.create({ title, category, body } satisfies Partial<Note>, now);
       createdNotes = [created.id];
       this.search.reindex();
     } catch (err) {
@@ -134,18 +124,12 @@ export class Collector {
     now: string
   ): Parameters<NoteStore['create']>[0] {
     const bulletList = keypoints.map((k) => `- ${k}`).join('\n');
+    // Provenance lives in the body: notes carry no frontmatter (FR-NOTE-5).
     const body =
       `> Collected from [${url}](${url}) on ${now}\n\n` +
       `## Key points\n\n${bulletList || '- (none extracted)'}\n\n` +
       `## Summary\n\n${summary}\n`;
-    return {
-      title,
-      category,
-      tags: ['collected'],
-      source: url,
-      type: 'collected',
-      body
-    } satisfies Partial<Note>;
+    return { title, category, body } satisfies Partial<Note>;
   }
 }
 
