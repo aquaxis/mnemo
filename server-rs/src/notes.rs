@@ -233,6 +233,58 @@ impl NoteStore {
     }
 }
 
+/// Current time as ISO-8601 UTC, for run records and note headers.
+pub fn iso_now() -> String {
+    iso(SystemTime::now())
+}
+
+/// Local wall-clock parts used by the cron tick: (minute stamp, minute, hour,
+/// day, month, weekday). The offset comes from the TZ the OS reports for now,
+/// derived by comparing local and UTC formatting of the same instant.
+pub fn local_clock() -> (u64, u32, u32, u32, u32, u32) {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let secs = now.as_secs() as i64 + local_offset_secs();
+    let days = secs.div_euclid(86_400);
+    let tod = secs.rem_euclid(86_400);
+    let (_y, mo, da) = civil_from_days(days);
+    // 1970-01-01 was a Thursday (weekday 4), Sunday = 0.
+    let weekday = ((days + 4).rem_euclid(7)) as u32;
+    (
+        (secs / 60) as u64,
+        (tod % 3600 / 60) as u32,
+        (tod / 3600) as u32,
+        da,
+        mo,
+        weekday,
+    )
+}
+
+/// Seconds east of UTC for the current local time, read once per process.
+fn local_offset_secs() -> i64 {
+    use std::sync::OnceLock;
+    static OFFSET: OnceLock<i64> = OnceLock::new();
+    *OFFSET.get_or_init(|| {
+        // `date +%z` reports the offset the OS applies right now (+0900).
+        let out = std::process::Command::new("date").arg("+%z").output().ok();
+        let text = out
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        parse_offset(&text).unwrap_or(0)
+    })
+}
+
+fn parse_offset(text: &str) -> Option<i64> {
+    let bytes = text.as_bytes();
+    if bytes.len() < 5 {
+        return None;
+    }
+    let sign = if bytes[0] == b'-' { -1 } else { 1 };
+    let hours: i64 = text.get(1..3)?.parse().ok()?;
+    let mins: i64 = text.get(3..5)?.parse().ok()?;
+    Some(sign * (hours * 3600 + mins * 60))
+}
+
 fn iso(t: SystemTime) -> String {
     // ISO-8601 in UTC with milliseconds, matching the Node server's output.
     let d = t.duration_since(UNIX_EPOCH).unwrap_or_default();
