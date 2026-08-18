@@ -70,9 +70,12 @@ the target directory is not a Mnemo installation, the script refuses to touch it
 ```bash
 git clone https://github.com/aquaxis/mnemo.git
 cd mnemo
-npm install
-npm start           # builds the web app and launches the server
+npm install         # web app dependencies
+npm start           # builds the web app + server binary, then runs the server
 ```
+
+The first build compiles the Rust server, which takes a minute or so; later
+builds are seconds.
 
 Then open <http://localhost:3000>.
 
@@ -118,8 +121,9 @@ The CLI agent runs with the data directory as its working directory, so it can
 search and read all your notes under `notes/` to answer, while writing anything
 it generates to `scripts/`.
 
-If the selected backend is unavailable, Mnemo falls back to the local heuristic
-so collection never hard-fails.
+If the selected backend is unavailable, Mnemo says so — in the chat reply, in
+the run history of a scheduled task, and per source for a collection run — and
+keeps serving. It does not substitute made-up text for a missing model.
 
 ### Reliability settings
 

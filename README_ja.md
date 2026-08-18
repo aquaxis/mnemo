@@ -70,9 +70,11 @@ curl -fsSL https://raw.githubusercontent.com/aquaxis/mnemo/main/install.sh | sh 
 ```bash
 git clone https://github.com/aquaxis/mnemo.git
 cd mnemo
-npm install
-npm start           # Web アプリをビルドしサーバーを起動
+npm install         # Web アプリの依存関係
+npm start           # Web アプリとサーバーバイナリをビルドして起動
 ```
+
+初回は Rust サーバーのコンパイルに1分程度かかります（2回目以降は数秒です）。
 
 その後 <http://localhost:3000> を開きます。
 
@@ -117,8 +119,9 @@ npm test            # cargo test
 CLI エージェントはデータディレクトリを作業ディレクトリとして起動されるため、
 `notes/` 配下の全ノートを検索・参照して回答できます。
 
-選択したバックエンドが利用できない場合は、収集が失敗しないよう自動的にローカル
-簡易処理へフォールバックします。
+選択したバックエンドが利用できない場合は、その旨を通知します（チャットの返信、
+定期タスクの実行履歴、収集ではソースごとに表示）。サーバーは動作を続け、
+モデルが無いまま作文した内容を回答として返すことはありません。
 
 ### 安定動作のための設定
 
