@@ -16,7 +16,7 @@ use std::sync::Arc;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
-use axum::routing::get;
+use axum::routing::{any, get};
 use axum::Router;
 use serde::Deserialize;
 use serde_json::json;
@@ -76,6 +76,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(get_note).put(update_note).delete(delete_note),
         )
         .route("/api/search", get(search_notes))
+        // Endpoints still served by the TypeScript server must answer as API
+        // routes, not fall through to the SPA shell: a client parsing JSON
+        // would otherwise choke on an HTML page with status 200.
+        .route("/api/*rest", any(api_not_ported))
         .with_state(state.clone());
 
     // Static: binary assets under /assets/, the built web app everywhere else,
@@ -176,6 +180,16 @@ async fn search_notes(
 ) -> impl IntoResponse {
     let notes = s.search.search(q.q.as_deref().unwrap_or(""), 30);
     Json(json!({ "notes": notes }))
+}
+
+/// Placeholder for the endpoints not ported yet (chat, jobs, settings, assets).
+async fn api_not_ported(AxumPath(rest): AxumPath<String>) -> impl IntoResponse {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({
+            "error": format!("/api/{rest} is not implemented by the Rust server yet"),
+        })),
+    )
 }
 
 fn not_found() -> (StatusCode, Json<serde_json::Value>) {

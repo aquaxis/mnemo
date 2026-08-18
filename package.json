@@ -18,7 +18,10 @@
     "update": "sh ./install.sh .",
     "test": "npm run test --workspace server",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "build:rs": "cargo build --release --manifest-path server-rs/Cargo.toml",
+    "start:rs": "npm run build:web && npm run build:rs && ./server-rs/target/release/mnemo-server",
+    "test:rs": "cargo test --manifest-path server-rs/Cargo.toml"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.0",
