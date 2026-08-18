@@ -78,8 +78,11 @@ do_install() {
 # way (it is git-ignored).
 update_from_git() {
   echo "Updating the source (git) ..."
-  if [ -n "$(git -C "$TARGET_DIR" status --porcelain)" ]; then
-    die "the installation has local changes. Commit, stash, or revert them and re-run.
+  # Only *tracked* modifications can block a fast-forward. Untracked files —
+  # notes an agent wrote, editor leftovers, a stray script — never do, so they
+  # must not stop an update.
+  if [ -n "$(git -C "$TARGET_DIR" status --porcelain --untracked-files=no)" ]; then
+    die "the installation has local changes to tracked files. Commit, stash, or revert them and re-run.
        Nothing was modified; your data/ directory is untouched."
   fi
   branch=$(git -C "$TARGET_DIR" rev-parse --abbrev-ref HEAD)

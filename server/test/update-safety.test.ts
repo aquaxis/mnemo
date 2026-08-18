@@ -140,6 +140,13 @@ test('install.sh never lists data/ or node_modules/ among updated paths (NFR-1b)
     assert.ok(!entries.includes(forbidden), `${forbidden} must never be updated`);
   }
   assert.match(script, /pull --ff-only/, 'git updates are fast-forward only');
+  // Untracked files (an agent's stray script, editor leftovers) cannot block a
+  // fast-forward, so they must not abort an update — only tracked edits may.
+  assert.match(
+    script,
+    /status --porcelain --untracked-files=no/,
+    'the dirty check ignores untracked files'
+  );
   assert.doesNotMatch(script, /rm -rf "\$TARGET_DIR/, 'the updater never deletes inside the install');
 });
 
