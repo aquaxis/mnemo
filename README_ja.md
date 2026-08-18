@@ -24,7 +24,7 @@ Wiki、AI エージェントによる Web 情報収集、定期タスク実行�
 
 ## 動作要件
 
-- Node.js >= 18（Python は一切使用しません）。
+- Node.js >= 18（Web アプリのビルド用）と Rust（cargo、サーバーのビルド用。<https://rustup.rs/> から導入）。Python は一切使用しません。
 
 ## インストール（ワンライナー）
 
@@ -79,7 +79,9 @@ npm start           # Web アプリをビルドしサーバーを起動
 ### 開発
 
 ```bash
-npm run dev         # Vite 開発サーバー (5173) + API サーバー (3000)、プロキシ付き
+npm run dev:web     # Vite 開発サーバー (5173)。API は起動中のサーバーへプロキシ
+npm run build:rs    # サーバーバイナリのみビルド
+npm test            # cargo test
 ```
 
 ## 設定
@@ -129,11 +131,8 @@ CLI エージェントはデータディレクトリを作業ディレクトリ�
 ### ログ
 
 ログは `data/logs/mnemo.log` に出力され、コンソールには起動行のみ表示します。
-これは意図的な仕様です。Linux / macOS では Node の端末への書き込みは
-**ブロッキング**であるため、起動した端末を閉じた場合（あるいは SSH が切断され
-端末が読み出されなくなった場合）にサーバーが停止してしまいます
-（プロセスは生きているのにリクエストに応答しなくなる）。ファイルへ出力すること
-で、端末の状態に関係なくサーバーが動き続けます。
+起動した端末の状態に依存しないための仕様です（旧 Node 版では、端末を閉じると
+サーバーが停止する問題がありました）。
 
 コンソールに出力したい場合（開発時など）は `MNEMO_LOG=stdout` を指定するか、
 `config.json` に `"logTarget": "stdout"` を設定します。
@@ -186,8 +185,12 @@ data/
 
 ## 技術スタック
 
-全面的に TypeScript。サーバー：Fastify。Web：React + Vite + Tailwind。エディタ：
-CodeMirror 6。検索：FlexSearch。スケジューリング：node-cron。
+サーバー：**Rust**（axum + tokio）。ノートはファイルシステム、検索はメモリ上の
+コーパスを並列走査、cron は内蔵。Web：TypeScript（React + Vite + Tailwind）、
+エディタは CodeMirror 6。
+
+ノート数の増加を受けてサーバーを TypeScript から移植しました。1,433件のノートで
+起動が 2秒 → 0.4秒、常駐メモリが約600MB → 約56MB になっています。
 
 ## ライセンス
 

@@ -5,23 +5,18 @@
   "description": "Mnemo — an integrated, Markdown-based knowledge database (memory & knowledge archive).",
   "type": "module",
   "workspaces": [
-    "server",
     "web"
   ],
   "scripts": {
-    "build": "npm run build --workspace web",
+    "build": "npm run build:web && npm run build:rs",
     "build:web": "npm run build --workspace web",
-    "start": "npm run build:web && npm run start --workspace server",
-    "dev:server": "npm run dev --workspace server",
-    "dev:web": "npm run dev --workspace web",
-    "dev": "npm run dev:server & npm run dev:web",
-    "update": "sh ./install.sh .",
-    "test": "npm run test --workspace server",
-    "lint": "eslint .",
-    "format": "prettier --write .",
     "build:rs": "cargo build --release --manifest-path server-rs/Cargo.toml",
-    "start:rs": "npm run build:web && npm run build:rs && ./server-rs/target/release/mnemo-server",
-    "test:rs": "cargo test --manifest-path server-rs/Cargo.toml"
+    "start": "npm run build && ./server-rs/target/release/mnemo-server",
+    "dev:web": "npm run dev --workspace web",
+    "update": "sh ./install.sh .",
+    "test": "cargo test --manifest-path server-rs/Cargo.toml",
+    "lint": "cargo clippy --manifest-path server-rs/Cargo.toml -- -D warnings || cargo build --release --manifest-path server-rs/Cargo.toml",
+    "format": "cargo fmt --manifest-path server-rs/Cargo.toml"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.0",

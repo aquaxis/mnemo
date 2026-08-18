@@ -9,9 +9,11 @@
 mod agent;
 mod assets;
 mod config;
+mod crawler;
 mod jobs;
 mod log;
 mod notes;
+mod proposal;
 mod search;
 
 use std::net::SocketAddr;
@@ -85,6 +87,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = PathBuf::from(
         std::env::var("MNEMO_DATA_DIR").unwrap_or_else(|_| "data".to_string()),
     );
+    // Seed from templates/ on first run, then make sure the layout exists.
+    let templates_dir = PathBuf::from(
+        std::env::var("MNEMO_TEMPLATES_DIR").unwrap_or_else(|_| "templates".to_string()),
+    );
+    config::seed_data_dir(&data_dir, &templates_dir)?;
     config::ensure_layout(&data_dir)?;
     let cfg = config::load(data_dir.clone());
     let port = cfg.port;
@@ -139,6 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/jobs/:id", put(update_job).delete(delete_job))
         .route("/api/jobs/:id/runs", get(job_runs))
         .route("/api/jobs/:id/run", post(run_job_now))
+        .route("/api/agent/collect", post(collect))
         .route("/api/chat", post(chat))
         .route("/api/chat/save", post(save_chat))
         // Endpoints still served by the TypeScript server must answer as API
@@ -491,14 +499,140 @@ struct ChatRequest {
 
 async fn chat(State(s): State<Arc<AppState>>, Json(req): Json<ChatRequest>) -> impl IntoResponse {
     let cfg = s.config();
+    let last_user = req
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.clone())
+        .unwrap_or_default();
+
+    // If the message asks for a recurring task, analyse it *alongside* the
+    // reply: in sequence the two agent runs add up and can approach the
+    // timeout (FR-CHAT-9).
+    let proposal_task = {
+        let s = s.clone();
+        let cfg = cfg.clone();
+        let text = last_user.clone();
+        tokio::spawn(async move {
+            if text.trim().is_empty() || !proposal::mentions_cadence(&text) {
+                return None;
+            }
+            let prompt = proposal::proposal_prompt(&text);
+            match s.agent.complete(&cfg.ai, &cfg.data_dir, &prompt).await {
+                Ok(raw) => proposal::parse_proposal(&raw).map(Ok),
+                Err(e) => Some(Err(e.message)),
+            }
+        })
+    };
+
     let prompt = chat_prompt(&req.messages, &cfg.ai.output_language);
-    match s.agent.complete(&cfg.ai, &cfg.data_dir, &prompt).await {
-        Ok(reply) => Json(json!({ "reply": reply })).into_response(),
+    let reply = match s.agent.complete(&cfg.ai, &cfg.data_dir, &prompt).await {
+        Ok(reply) => reply,
         Err(e) => {
             s.logger.warn(&format!("chat failed: {}", e.message));
-            Json(json!({ "reply": format!("⚠️ {}", e.message) })).into_response()
+            format!("⚠️ {}", e.message)
+        }
+    };
+
+    let mut body = json!({ "reply": reply });
+    match proposal_task.await.unwrap_or(None) {
+        Some(Ok(p)) => {
+            let patch = JobPatch {
+                name: Some(p.name),
+                cron: Some(p.cron),
+                action: Some("collect".into()),
+                params: Some(jobs::JobParams {
+                    instruction: Some(p.instruction),
+                    sources: Vec::new(),
+                    category: Some(p.category),
+                }),
+                enabled: Some(true),
+            };
+            match s.jobs.create(patch) {
+                Ok(job) => {
+                    s.logger.info(&format!("registered a task from chat: {}", job.name));
+                    body["scheduled"] = json!({
+                        "id": job.id,
+                        "name": job.name,
+                        "cron": job.cron,
+                        "instruction": job.params.instruction.unwrap_or_default(),
+                    });
+                }
+                Err(e) => body["scheduleError"] = json!(e.to_string()),
+            }
+        }
+        Some(Err(message)) => {
+            s.logger.warn(&format!("could not register a task from chat: {message}"));
+            body["scheduleError"] = json!(message);
+        }
+        None => {}
+    }
+    Json(body).into_response()
+}
+
+// --- Agent collection (FR-AGENT-1..4) ----------------------------------------
+#[derive(Deserialize)]
+struct CollectRequest {
+    #[serde(default)]
+    sources: Vec<String>,
+    category: Option<String>,
+}
+
+/// Crawl each source, summarize it with the configured backend, and save the
+/// summary as a note (FR-AGENT-1..4, FR-AGENT-6).
+async fn collect(
+    State(s): State<Arc<AppState>>,
+    Json(req): Json<CollectRequest>,
+) -> impl IntoResponse {
+    let cfg = s.config();
+    let category = req.category.unwrap_or_else(|| "collected".into());
+    let mut created: Vec<String> = Vec::new();
+    let mut errors: Vec<serde_json::Value> = Vec::new();
+
+    for url in req.sources {
+        match crawler::crawl(&url).await {
+            Ok(page) => {
+                let prompt = summarize_prompt(&page.title, &page.text, &cfg.ai.output_language);
+                let summary = match s.agent.complete(&cfg.ai, &cfg.data_dir, &prompt).await {
+                    Ok(out) => out,
+                    Err(e) => {
+                        errors.push(json!({ "url": url, "message": e.message }));
+                        continue;
+                    }
+                };
+                // Provenance lives in the body: notes carry no frontmatter.
+                let source = &page.url;
+                let body = format!(
+                    "> Collected from [{source}]({source}) on {}\n\n{}\n",
+                    now_iso(),
+                    summary.trim()
+                );
+                let input = NoteInput {
+                    title: Some(page.title.clone()),
+                    category: Some(category.clone()),
+                    body: Some(body),
+                };
+                match s.notes.create(&input) {
+                    Ok(note) => {
+                        s.search.upsert(&s.notes, &note.meta.id);
+                        created.push(note.meta.id);
+                    }
+                    Err(e) => errors.push(json!({ "url": url, "message": e.to_string() })),
+                }
+            }
+            Err(message) => errors.push(json!({ "url": url, "message": message })),
         }
     }
+    Json(json!({ "createdNotes": created, "errors": errors }))
+}
+
+fn summarize_prompt(title: &str, text: &str, lang: &str) -> String {
+    let excerpt: String = text.chars().take(12_000).collect();
+    format!(
+        "Summarize the following web page titled \"{title}\". Return 3-5 concise key points as a          Markdown bullet list (\"- \"), then a one-paragraph summary. Write the key points and the          summary in {}.\n\n{excerpt}",
+        language_name(lang)
+    )
 }
 
 #[derive(Deserialize)]

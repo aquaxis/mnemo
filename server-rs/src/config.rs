@@ -66,6 +66,44 @@ fn read_json(path: &Path) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
+/// Seed `data/` from `templates/` on first run (FR-INSTALL-3).
+///
+/// Only when the data directory is missing or empty, and `config.json` only
+/// when it does not exist — an update must never reset notes or settings
+/// (FR-INSTALL-4, NFR-1b).
+pub fn seed_data_dir(data_dir: &Path, templates_dir: &Path) -> io::Result<()> {
+    let empty = !data_dir.exists()
+        || fs::read_dir(data_dir).map(|mut d| d.next().is_none()).unwrap_or(true);
+    if !empty {
+        return Ok(());
+    }
+    fs::create_dir_all(data_dir)?;
+    let template_notes = templates_dir.join("notes");
+    if template_notes.is_dir() {
+        copy_tree(&template_notes, &data_dir.join("notes"))?;
+    }
+    let example = templates_dir.join("config.example.json");
+    let target = data_dir.join("config.json");
+    if example.is_file() && !target.exists() {
+        fs::copy(example, target)?;
+    }
+    Ok(())
+}
+
+fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
 /// Create the runtime layout (FR-FILE-*, FR-FILE-7).
 pub fn ensure_layout(data_dir: &Path) -> io::Result<()> {
     for dir in [
@@ -212,4 +250,107 @@ pub fn command_exists(command: &str) -> bool {
         .split(':')
         .filter(|p| !p.is_empty())
         .any(|dir| Path::new(dir).join(command).is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "mnemo-cfg-{tag}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    /// A fresh install seeds data/ from templates/ (FR-INSTALL-3).
+    #[test]
+    fn seeds_a_fresh_data_dir() {
+        let root = tmp("seed");
+        let templates = root.join("templates");
+        fs::create_dir_all(templates.join("notes/inbox")).unwrap();
+        fs::write(templates.join("notes/inbox/welcome.md"), "hi").unwrap();
+        fs::write(templates.join("config.example.json"), "{\"port\":3000}").unwrap();
+
+        let data = root.join("data");
+        seed_data_dir(&data, &templates).unwrap();
+        assert!(data.join("notes/inbox/welcome.md").is_file());
+        assert!(data.join("config.json").is_file());
+        fs::remove_dir_all(root).ok();
+    }
+
+    /// An update must never reset notes or settings (FR-INSTALL-4, NFR-1b).
+    #[test]
+    fn never_overwrites_existing_data() {
+        let root = tmp("keep");
+        let templates = root.join("templates");
+        fs::create_dir_all(templates.join("notes/inbox")).unwrap();
+        fs::write(templates.join("notes/inbox/welcome.md"), "template").unwrap();
+        fs::write(templates.join("config.example.json"), "{\"port\":3000}").unwrap();
+
+        let data = root.join("data");
+        fs::create_dir_all(data.join("notes/inbox")).unwrap();
+        fs::write(data.join("notes/inbox/mine.md"), "keep me").unwrap();
+        fs::write(data.join("config.json"), "{\"port\":4321}").unwrap();
+
+        seed_data_dir(&data, &templates).unwrap();
+        assert_eq!(fs::read_to_string(data.join("notes/inbox/mine.md")).unwrap(), "keep me");
+        assert_eq!(fs::read_to_string(data.join("config.json")).unwrap(), "{\"port\":4321}");
+        assert!(!data.join("notes/inbox/welcome.md").exists(), "templates are not re-applied");
+        fs::remove_dir_all(root).ok();
+    }
+
+    /// Keys added by a later release are filled from defaults while user values
+    /// win (FR-INSTALL-5).
+    #[test]
+    fn fills_missing_keys_from_defaults() {
+        let root = tmp("merge");
+        let data = root.join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(
+            data.join("config.json"),
+            r#"{"port":4321,"ai":{"type":"claude-code","backends":{"agent-cli":{"model":"mine"}}}}"#,
+        )
+        .unwrap();
+
+        std::env::remove_var("MNEMO_PORT");
+        let cfg = load(data.clone());
+        assert_eq!(cfg.port, 4321, "user port preserved");
+        assert_eq!(cfg.ai.kind, "claude-code", "user backend preserved");
+        assert_eq!(cfg.ai.output_language, "ja", "missing key from defaults");
+        assert_eq!(cfg.ai.timeout_ms, DEFAULT_TIMEOUT_MS);
+        assert_eq!(cfg.ai.max_concurrent_runs, DEFAULT_MAX_CONCURRENT_RUNS);
+        assert_eq!(
+            cfg.ai.backends["agent-cli"]["model"].as_str(),
+            Some("mine"),
+            "user backend setting wins"
+        );
+        assert!(cfg.ai.backends.contains_key("claude-code"), "missing backend from defaults");
+        fs::remove_dir_all(root).ok();
+    }
+
+    /// Saving settings must not drop keys this server does not model.
+    #[test]
+    fn save_settings_preserves_unknown_keys() {
+        let root = tmp("save");
+        let data = root.join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("config.json"), r#"{"port":4321,"custom":{"keep":true}}"#).unwrap();
+
+        let patch = SettingsPatch {
+            output_language: Some("en".into()),
+            ..Default::default()
+        };
+        save_settings(&data, &patch).unwrap();
+        let raw: Value = serde_json::from_str(&fs::read_to_string(data.join("config.json")).unwrap()).unwrap();
+        assert_eq!(raw["port"], 4321, "unrelated keys survive");
+        assert_eq!(raw["custom"]["keep"], true);
+        assert_eq!(raw["ai"]["outputLanguage"], "en");
+        fs::remove_dir_all(root).ok();
+    }
 }

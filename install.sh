@@ -19,9 +19,8 @@ TARGET_DIR="${1:-mnemo}"
 # Paths refreshed by an update — everything the repository ships.
 # `data/` and `node_modules/` are deliberately absent: user content is never
 # part of an update (NFR-1b).
-SOURCE_PATHS="server web templates install.sh package.json package-lock.json \
-tsconfig.base.json eslint.config.js .prettierrc.json .gitignore \
-README.md README_ja.md LICENSE"
+SOURCE_PATHS="server-rs web templates install.sh package.json package-lock.json \
+tsconfig.base.json .prettierrc.json .gitignore README.md README_ja.md LICENSE"
 
 die() {
   echo "Error: $*" >&2
@@ -30,7 +29,13 @@ die() {
 
 require_node() {
   command -v node >/dev/null 2>&1 ||
-    die "Node.js (>=18) is required. Install it from https://nodejs.org/"
+    die "Node.js (>=18) is required to build the web app. Install it from https://nodejs.org/"
+}
+
+# The server is a Rust binary, built during install/update.
+require_cargo() {
+  command -v cargo >/dev/null 2>&1 ||
+    die "Rust (cargo) is required to build the server. Install it from https://rustup.rs/"
 }
 
 # A Mnemo installation is a directory whose package.json declares name "mnemo".
@@ -132,6 +137,7 @@ build() {
 
 # --- Main -------------------------------------------------------------------
 require_node
+require_cargo
 
 MODE=$(detect_mode "$TARGET_DIR")
 case "$MODE" in
