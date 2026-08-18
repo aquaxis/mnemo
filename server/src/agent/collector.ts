@@ -70,7 +70,7 @@ export class Collector {
       }
     }
 
-    if (createdNotes.length) this.search.reindex();
+    for (const id of createdNotes) this.search.upsert(id);
     return { createdNotes, errors };
   }
 
@@ -107,7 +107,7 @@ export class Collector {
         `**Task:** ${instruction}\n\n---\n\n${output}\n`;
       const created = this.notes.create({ title, category, body } satisfies Partial<Note>, now);
       createdNotes = [created.id];
-      this.search.reindex();
+      this.search.upsert(created.id);
     } catch (err) {
       errors.push({ url: '(task)', message: err instanceof Error ? err.message : String(err) });
     }

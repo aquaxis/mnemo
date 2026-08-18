@@ -113,19 +113,21 @@ app.get<{ Params: { id: string } }>('/api/notes/:id', async (req, reply) => {
 });
 app.post('/api/notes', async (req) => {
   const note = notes.create(req.body as Record<string, unknown>, now());
-  search.reindex();
+  search.upsert(note.id);
   return note;
 });
 app.put<{ Params: { id: string } }>('/api/notes/:id', async (req, reply) => {
   const note = notes.update(req.params.id, req.body as Record<string, unknown>, now());
   if (!note) return reply.code(404).send({ error: 'Not found' });
-  search.reindex();
+  // A rename changes the id, so drop the old entry as well.
+  if (note.id !== req.params.id) search.remove(req.params.id);
+  search.upsert(note.id);
   return note;
 });
 app.delete<{ Params: { id: string } }>('/api/notes/:id', async (req, reply) => {
   const ok = notes.delete(req.params.id);
   if (!ok) return reply.code(404).send({ error: 'Not found' });
-  search.reindex();
+  search.remove(req.params.id);
   return { deleted: true };
 });
 
@@ -229,7 +231,7 @@ app.post<{ Body: { messages: ChatMessage[]; id?: string; title?: string } }>(
     const note = req.body.id
       ? notes.update(req.body.id, input, now())
       : notes.create(input, now());
-    search.reindex();
+    if (note) search.upsert(note.id);
     return note;
   }
 );

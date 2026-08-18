@@ -48,10 +48,28 @@ const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
  */
 export class NoteStore {
   private readonly notesDir: string;
+  /**
+   * Cached category list. `get()` needs it on every lookup, and re-walking the
+   * tree each time made loading N notes cost N tree walks. Folders change
+   * rarely, so a short TTL is enough; our own mutations clear it immediately,
+   * and a folder created outside Mnemo appears within the TTL.
+   */
+  private categoryCache: { at: number; list: string[] } | null = null;
+  private static readonly CATEGORY_TTL_MS = 2000;
 
   constructor(dataDir: string) {
     this.notesDir = join(dataDir, 'notes');
     mkdirSync(this.notesDir, { recursive: true });
+  }
+
+  private categories(): string[] {
+    const now = Date.now();
+    if (this.categoryCache && now - this.categoryCache.at < NoteStore.CATEGORY_TTL_MS) {
+      return this.categoryCache.list;
+    }
+    const list = this.listCategories();
+    this.categoryCache = { at: now, list };
+    return list;
   }
 
   private categoryDir(category: string): string {
@@ -63,18 +81,24 @@ export class NoteStore {
     return join(this.categoryDir(category), `${id}.md`);
   }
 
-  /** All category folders as relative paths, nested folders included (FR-FILE-5). */
+  /**
+   * All category folders as relative paths, nested folders included
+   * (FR-FILE-5).
+   *
+   * `withFileTypes` is what makes this cheap: the directory entry already says
+   * whether it is a directory, so a folder of N notes costs one readdir instead
+   * of N `statSync` calls. `get()` runs this on every lookup, so with thousands
+   * of notes the difference is seconds, not milliseconds.
+   */
   listCategories(): string[] {
     if (!existsSync(this.notesDir)) return [];
     const out: string[] = [];
     const walk = (absDir: string, rel: string): void => {
-      for (const name of readdirSync(absDir)) {
-        const abs = join(absDir, name);
-        if (statSync(abs).isDirectory()) {
-          const relPath = rel ? `${rel}/${name}` : name;
-          out.push(relPath);
-          walk(abs, relPath);
-        }
+      for (const entry of readdirSync(absDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+        out.push(relPath);
+        walk(join(absDir, entry.name), relPath);
       }
     };
     walk(this.notesDir, '');
@@ -83,18 +107,19 @@ export class NoteStore {
 
   createCategory(category: string): void {
     mkdirSync(this.categoryDir(category), { recursive: true });
+    this.categoryCache = null;
   }
 
   /** List note metadata, newest-modified first (FR-NOTE-8, FR-UI-9). */
   list(category?: string): NoteMeta[] {
-    const categories = category ? [category] : this.listCategories();
+    const categories = category ? [category] : this.categories();
     const notes: NoteMeta[] = [];
     for (const cat of categories) {
       const dir = this.categoryDir(cat);
       if (!existsSync(dir)) continue;
-      for (const file of readdirSync(dir)) {
-        if (!file.endsWith('.md')) continue;
-        const meta = this.readMeta(join(dir, file), cat);
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+        const meta = this.readMeta(join(dir, entry.name), cat);
         if (meta) notes.push(meta);
       }
     }
@@ -136,7 +161,7 @@ export class NoteStore {
 
   /** Locate a note by id (its file name) across all categories. */
   get(id: string): Note | null {
-    for (const cat of this.listCategories()) {
+    for (const cat of this.categories()) {
       const path = this.filePath(cat, id);
       if (existsSync(path)) return this.readFile(path, cat);
     }
