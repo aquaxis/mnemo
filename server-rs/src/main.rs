@@ -164,7 +164,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            // Startup failures must be readable: the log goes to a file, so a
+            // bare error string on the console would be the only clue.
+            if e.kind() == std::io::ErrorKind::AddrInUse {
+                eprintln!(
+                    "Mnemo failed to start: port {port} is already in use — another instance is \
+                     probably still running.\n  Find it with:  ss -ltnp | grep :{port}\n  \
+                     Stop it with:  kill <pid>"
+                );
+            } else {
+                eprintln!("Mnemo failed to start: {e}");
+            }
+            std::process::exit(1);
+        }
+    };
     println!(
         "Mnemo (Rust) running on http://localhost:{port}\n  data:  {}\n  log:   {}\n  index: {index_ms} ms",
         data_dir.display(),
