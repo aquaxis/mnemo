@@ -16,3 +16,6 @@ dist/
 
 # Runtime data (generated; seeded from templates/)
 data/
+
+# Rust build output
+server-rs/target/

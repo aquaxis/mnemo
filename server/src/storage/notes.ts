@@ -124,8 +124,14 @@ export class NoteStore {
       }
     }
     // Sort on the file's modification time, so notes edited outside Mnemo are
-    // ordered correctly too.
-    return notes.sort((a, b) => b.updated.localeCompare(a.updated));
+    // ordered correctly too. Ties break by name: bulk-copied notes often share
+    // an mtime to the millisecond, and the order should not depend on the
+    // directory enumeration.
+    // Code-unit order for the tie-break (not localeCompare): it is stable
+    // across locales and matches the Rust server byte for byte while both run.
+    return notes.sort(
+      (a, b) => b.updated.localeCompare(a.updated) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+    );
   }
 
   /** Metadata read from the file's name and stat, without loading the body. */

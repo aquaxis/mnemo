@@ -1,0 +1,16 @@
+[package]
+name = "mnemo-server"
+version = "0.1.0"
+edition = "2021"
+description = "Mnemo server (Rust port of server/, FR-* per .aiprj)"
+license = "MIT"
+
+[dependencies]
+axum = { version = "0.7", features = ["multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process", "signal", "time", "sync"] }
+tower-http = { version = "0.5", features = ["fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
