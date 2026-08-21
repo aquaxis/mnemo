@@ -57,6 +57,13 @@ reinstalling:
 curl -fsSL https://raw.githubusercontent.com/aquaxis/mnemo/main/install.sh | sh -s -- my-mnemo
 ```
 
+To see which release an installation is on, open **Settings** — the version is
+shown at the bottom — or ask the server:
+
+```bash
+curl -s http://localhost:3000/api/version
+```
+
 An update refreshes the source and rebuilds; **`data/` is never written,
 moved, or deleted** — your notes (including nested folders), binary assets,
 `data/config.json`, and scheduled jobs with their run history all survive. New

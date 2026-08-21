@@ -152,6 +152,8 @@ export const api = {
     }).then(json<{ selected: string }>),
 
   settings: () => fetch('/api/settings').then(json<SettingsResponse>),
+  /** Read-only; kept off /api/settings, whose payload the UI writes back. */
+  version: () => fetch('/api/version').then(json<{ version: string }>),
   updateSettings: (patch: {
     type?: string;
     outputLanguage?: string;

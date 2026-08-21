@@ -140,6 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/search", get(search_notes))
         .route("/api/assets", post(upload_asset).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)))
         .route("/api/settings", get(get_settings).put(put_settings))
+        .route("/api/version", get(get_version))
         .route("/api/ai/backends", get(ai_backends))
         .route("/api/ai/backend", put(select_backend))
         .route("/api/jobs", get(list_jobs).post(create_job))
@@ -296,6 +297,17 @@ async fn upload_asset(State(s): State<Arc<AppState>>, mut form: Multipart) -> im
 }
 
 // --- Settings (FR-SETTINGS-1..3) ---------------------------------------------
+/// The running version, resolved at compile time from `Cargo.toml`.
+///
+/// Deliberately its own route rather than a field on `/api/settings`: that
+/// payload is the config document the UI writes back, and the config loader
+/// preserves keys it does not model, so a version carried there would sooner or
+/// later be persisted into `data/config.json` and outlive the binary that wrote
+/// it. Read-only, so the two never mix.
+async fn get_version() -> impl IntoResponse {
+    Json(json!({ "version": env!("CARGO_PKG_VERSION") }))
+}
+
 async fn get_settings(State(s): State<Arc<AppState>>) -> impl IntoResponse {
     let cfg = s.config();
     Json(json!({
@@ -765,4 +777,35 @@ fn server_error(e: std::io::Error) -> (StatusCode, Json<serde_json::Value>) {
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({ "error": e.to_string() })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    /// npm and cargo each insist on their own manifest, so the version is
+    /// duplicated by necessity and drift is a question of when, not if. The
+    /// binary speaks for `Cargo.toml` (`env!("CARGO_PKG_VERSION")`, served by
+    /// `/api/version`), so a package that disagrees with it would ship a
+    /// release labelled two different things.
+    #[test]
+    fn every_manifest_declares_the_same_version() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("server-rs has a parent directory");
+        let ours = env!("CARGO_PKG_VERSION");
+
+        for manifest in ["package.json", "web/package.json"] {
+            let path = root.join(manifest);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+            let json: serde_json::Value =
+                serde_json::from_str(&text).unwrap_or_else(|e| panic!("{manifest} is not JSON: {e}"));
+            let theirs = json["version"].as_str().unwrap_or_else(|| {
+                panic!("{manifest} has no string \"version\"")
+            });
+            assert_eq!(
+                theirs, ours,
+                "{manifest} says {theirs} but server-rs/Cargo.toml says {ours}"
+            );
+        }
+    }
 }

@@ -30,6 +30,7 @@ export function SettingsView() {
   const [ai, setAi] = useState<AiConfig | null>(null);
   const [available, setAvailable] = useState<Record<string, boolean>>({});
   const [logFile, setLogFile] = useState<string | null>(null);
+  const [version, setVersion] = useState<string | null>(null);
   const [status, setStatus] = useState('');
 
   useEffect(() => {
@@ -39,6 +40,9 @@ export function SettingsView() {
       setAvailable(r.available ?? {});
       setLogFile(r.logFile ?? null);
     });
+    // Which release this installation is on (FR-APP-2) — the answer to "what
+    // did `npm run update` move me to?".
+    api.version().then((r) => setVersion(r.version));
   }, []);
 
   if (!ai) return <div className="p-6 text-sm text-gray-400">Loading…</div>;
@@ -171,6 +175,12 @@ export function SettingsView() {
         {logFile && (
           <p className="text-xs text-gray-400">
             Server log: <code>{logFile}</code>
+          </p>
+        )}
+
+        {version && (
+          <p className="text-xs text-gray-400">
+            Mnemo version: <code>{version}</code>
           </p>
         )}
 

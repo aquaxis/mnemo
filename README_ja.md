@@ -58,6 +58,13 @@ npm run update
 curl -fsSL https://raw.githubusercontent.com/aquaxis/mnemo/main/install.sh | sh -s -- my-mnemo
 ```
 
+どのバージョンが入っているかは、**設定**ページの末尾に表示されます。
+サーバーに直接尋ねることもできます：
+
+```bash
+curl -s http://localhost:3000/api/version
+```
+
 アップデートはソースの更新と再ビルドのみを行い、**`data/` には一切書き込み・
 移動・削除を行いません**。ノート（下位階層のフォルダを含む）、バイナリ資産、
 `data/config.json`、スケジュールタスクとその実行履歴はすべてそのまま保持されます。
