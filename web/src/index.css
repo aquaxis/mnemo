@@ -23,6 +23,18 @@ body,
   margin: 0;
 }
 
+/* On phones the browser chrome and the on-screen keyboard change how much of
+   the viewport is actually usable; `dvh` tracks that, so the chat composer and
+   the editor stay reachable instead of being pushed under the keyboard
+   (FR-UI-11). `height: 100%` above remains the fallback. */
+@supports (height: 100dvh) {
+  html,
+  body,
+  #root {
+    height: 100dvh;
+  }
+}
+
 body {
   font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   color: hsl(222 47% 11%);

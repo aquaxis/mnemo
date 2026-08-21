@@ -11,7 +11,11 @@ The name comes from **Mnemosyne**, the Greek goddess of memory.
 
 ## Features
 
-- **Three-pane UI** (navigation · note list · editor), modeled on the shadcn Mail layout; the left and middle panes collapse.
+- **Three-pane UI** (navigation · note list · editor), modeled on the shadcn Mail layout. Drag a
+  pane boundary to resize it, or drag it past its minimum to collapse the pane into a rail — the
+  chevron buttons do the same thing, and the layout you arrange is remembered per browser.
+- **Works on a phone**: below 768px the panes become one screen at a time — folders → notes →
+  editor — with a back control and a bottom navigation bar.
 - **Live Markdown editor** — Obsidian-style inline live preview (CodeMirror 6 + [codemirror-live-markdown](https://codemirror-live-markdown.vercel.app/)).
 - **AI information collection** — crawl web pages, extract key points, save them as notes.
 - **AI chat (research mode)** — ask a question and the agent researches the **latest** information on the web (several searches, recent sources cross-checked) before answering in detail with a list of sources; it can search your notes too. Conversations auto-save as notes, show the elapsed time against the timeout while working, and can be cancelled.
