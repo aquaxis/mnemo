@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Mnemo">
+  <!--
+    One filled tile and one bold glyph: at 16x16 a tab icon has room for
+    nothing else. The M is Mnemo / Mnemosyne; the tile is the app accent
+    (Tailwind `accent`, hsl(221 83% 53%)).
+    The tile lightens on a dark tab strip so the mark keeps its contrast there.
+  -->
+  <style>
+    .tile { fill: hsl(221 83% 53%); }
+    .mark { stroke: #fff; }
+    @media (prefers-color-scheme: dark) {
+      .tile { fill: hsl(221 91% 64%); }
+      .mark { stroke: hsl(222 47% 11%); }
+    }
+  </style>
+  <rect class="tile" width="32" height="32" rx="7" />
+  <path
+    class="mark"
+    d="M8 23V9l8 9 8-9v14"
+    fill="none"
+    stroke-width="3.6"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>
