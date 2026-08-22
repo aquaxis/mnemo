@@ -10,5 +10,11 @@
       "agent-cli": { "command": "agent-cli", "args": ["run", "--auto-approve-tools"], "model": null },
       "claude-code": { "command": "claude", "args": ["-p"], "model": null }
     }
+  },
+  "search": {
+    "endpoint": "https://s.jina.ai/?q=",
+    "apiKey": "",
+    "timeoutMs": 20000,
+    "endpoints": []
   }
 }

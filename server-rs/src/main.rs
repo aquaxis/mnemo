@@ -31,7 +31,7 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use agent::Agent;
 use assets::AssetStore;
-use config::{AppConfig, SettingsPatch};
+use config::{AppConfig, SearchProvider, SettingsPatch};
 use log::Logger;
 use jobs::{Cron, Job, JobPatch, JobRun, JobStore};
 use notes::{NoteInput, NoteStore};
@@ -445,7 +445,8 @@ async fn run_job(s: Arc<AppState>, id: &str) -> Option<JobRun> {
     let (status, created, message) = if instruction.trim().is_empty() {
         ("error".to_string(), Vec::new(), "the task has no instruction".to_string())
     } else {
-        let prompt = instruction_prompt(&instruction, &cfg.ai.output_language);
+        let hint = search_hint(&cfg.search.providers);
+        let prompt = instruction_prompt(&instruction, &cfg.ai.output_language, &hint);
         match s.agent.complete(&cfg.ai, &cfg.data_dir, &prompt).await {
             Ok(output) => {
                 let body = format!(
@@ -554,7 +555,8 @@ async fn chat(State(s): State<Arc<AppState>>, Json(req): Json<ChatRequest>) -> i
         })
     };
 
-    let prompt = chat_prompt(&req.messages, &cfg.ai.output_language);
+    let hint = search_hint(&cfg.search.providers);
+    let prompt = chat_prompt(&req.messages, &cfg.ai.output_language, &hint);
     let reply = match s.agent.complete(&cfg.ai, &cfg.data_dir, &prompt).await {
         Ok(reply) => reply,
         Err(e) => {
@@ -604,11 +606,18 @@ async fn chat(State(s): State<Arc<AppState>>, Json(req): Json<ChatRequest>) -> i
 struct CollectRequest {
     #[serde(default)]
     sources: Vec<String>,
+    /// Optional web-search query: its top results are found via the search
+    /// endpoint and crawled as sources (FR-AGENT-7).
+    query: Option<String>,
     category: Option<String>,
 }
 
+/// How many web-search results a collection run crawls.
+const SEARCH_SOURCE_LIMIT: usize = 5;
+
 /// Crawl each source, summarize it with the configured backend, and save the
-/// summary as a note (FR-AGENT-1..4, FR-AGENT-6).
+/// summary as a note (FR-AGENT-1..4, FR-AGENT-6). Sources may be given
+/// explicitly and/or discovered by web search (FR-AGENT-7).
 async fn collect(
     State(s): State<Arc<AppState>>,
     Json(req): Json<CollectRequest>,
@@ -618,7 +627,46 @@ async fn collect(
     let mut created: Vec<String> = Vec::new();
     let mut errors: Vec<serde_json::Value> = Vec::new();
 
-    for url in req.sources {
+    // Start from any explicit sources, then add web-search hits across all
+    // configured providers (FR-AGENT-7, update #26).
+    let mut urls = req.sources.clone();
+    if let Some(query) = req.query.as_ref().map(|q| q.trim()).filter(|q| !q.is_empty()) {
+        let providers: Vec<(&str, &str)> = cfg
+            .search
+            .providers
+            .iter()
+            .map(|p| (p.url.as_str(), p.api_key.as_str()))
+            .collect();
+        let outcome =
+            crawler::web_search_all(&providers, query, cfg.search.timeout_ms, SEARCH_SOURCE_LIMIT).await;
+        if !outcome.hits.is_empty() {
+            let preview = outcome
+                .hits
+                .iter()
+                .map(|h| {
+                    let snip: String = h.snippet.chars().take(80).collect();
+                    format!("{} <{}> {snip}", h.title, h.url)
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
+            s.logger.info(&format!(
+                "web search {query:?} found {} result(s): {preview}",
+                outcome.hits.len()
+            ));
+        }
+        for hit in outcome.hits {
+            if !urls.contains(&hit.url) {
+                urls.push(hit.url);
+            }
+        }
+        // A failing provider must not fail the run (FR-AI-5, FR-REL-6).
+        for message in outcome.errors {
+            s.logger.warn(&format!("web search for {query:?} — {message}"));
+            errors.push(json!({ "query": query, "message": message }));
+        }
+    }
+
+    for url in urls {
         match crawler::crawl(&url).await {
             Ok(page) => {
                 let prompt = summarize_prompt(&page.title, &page.text, &cfg.ai.output_language);
@@ -731,25 +779,52 @@ fn language_name(code: &str) -> &str {
 /// Where the agent may read and write (FR-FILE-6, FR-FILE-7).
 const WORKSPACE_RULES: &str = "Your working directory is Mnemo's data directory. It contains:\n- \"notes/\" - the user's knowledge as Markdown files, one subfolder per category. Search and read here when the question is about the user's notes; write nothing here except Markdown notes.\n- \"scripts/\" - put any script, fetch command or other generated working file you create HERE, never under \"notes/\".\n- \"assets/\", \"jobs/\", \"logs/\" - Mnemo's own storage. Ignore them; do not read or search them.\n";
 
-fn chat_prompt(messages: &[ChatMessage], lang: &str) -> String {
+/// Tell a tool-capable backend how to search the web through the configured
+/// providers (FR-AGENT-7, update #26). No providers → no hint (search disabled).
+/// Lists every configured endpoint and invites the agent to use other search
+/// sites too (「他にも使用可能なWebサイトを使用する」). This wires web search into
+/// the agent-driven paths (chat FR-CHAT-8, tasks) without a server round-trip.
+fn search_hint(providers: &[SearchProvider]) -> String {
+    let mut urls = providers.iter().map(|p| p.url.trim()).filter(|u| !u.is_empty());
+    let Some(primary) = urls.next() else {
+        return String::new();
+    };
+    let mut hint = format!(
+        "To search the web for current information, run: \
+         curl \"{primary}<url-encoded query>\" -H \"Accept: application/json\" \
+         — it returns JSON search results (title, url, description). "
+    );
+    let others: Vec<&str> = urls.collect();
+    if others.is_empty() {
+        hint.push_str("You may also use other search sites you know of. ");
+    } else {
+        hint.push_str(&format!("You may also use these other search sites: {}. ", others.join(", ")));
+    }
+    hint.push_str("Use them to find sources, then read the pages you need.\n");
+    hint
+}
+
+fn chat_prompt(messages: &[ChatMessage], lang: &str, hint: &str) -> String {
     let history = messages
         .iter()
         .map(|m| format!("{}: {}", if m.role == "user" { "User" } else { "Assistant" }, m.content))
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "You are Mnemo's research assistant. Respond in {}.\n         For any question about facts, events, products or documentation, research the latest          information before answering: search broadly, prefer recent material, and cross-check          several independent sources rather than answering from memory.\n         Answer in depth with Markdown headings and lists, state the date or version of what you          report, and end with a \"Sources\" list of the pages you used. If you could not search,          say so and mark the answer unverified.\n{}\n{}\nAssistant:",
+        "You are Mnemo's research assistant. Respond in {}.\n         For any question about facts, events, products or documentation, research the latest          information before answering: search broadly, prefer recent material, and cross-check          several independent sources rather than answering from memory.\n         Answer in depth with Markdown headings and lists, state the date or version of what you          report, and end with a \"Sources\" list of the pages you used. If you could not search,          say so and mark the answer unverified.\n{}{}\n{}\nAssistant:",
         language_name(lang),
         WORKSPACE_RULES,
+        hint,
         history
     )
 }
 
-fn instruction_prompt(instruction: &str, lang: &str) -> String {
+fn instruction_prompt(instruction: &str, lang: &str, hint: &str) -> String {
     format!(
-        "You are an AI agent. Perform the following task and return the result as Markdown.          Write the result in {}.\n{}         Return the result as your answer - Mnemo saves it as a note itself, so do not write the          report into \"notes/\" yourself.\n\nTask:\n{}\n",
+        "You are an AI agent. Perform the following task and return the result as Markdown.          Write the result in {}.\n{}{}         Return the result as your answer - Mnemo saves it as a note itself, so do not write the          report into \"notes/\" yourself.\n\nTask:\n{}\n",
         language_name(lang),
         WORKSPACE_RULES,
+        hint,
         instruction
     )
 }

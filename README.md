@@ -115,6 +115,12 @@ On first run, `data/` is seeded from `templates/`. Edit `data/config.json`:
       "agent-cli": { "command": "agent-cli", "args": ["run", "--auto-approve-tools"] },
       "claude-code": { "command": "claude", "args": ["-p"] }
     }
+  },
+  "search": {
+    "endpoint": "https://s.jina.ai/?q=",
+    "apiKey": "",
+    "timeoutMs": 20000,
+    "endpoints": []
   }
 }
 ```
@@ -135,6 +141,27 @@ it generates to `scripts/`.
 If the selected backend is unavailable, Mnemo says so — in the chat reply, in
 the run history of a scheduled task, and per source for a collection run — and
 keeps serving. It does not substitute made-up text for a missing model.
+
+### Web search
+
+Mnemo can find sources with a curl-accessible search endpoint (the
+[Jina AI](https://jina.ai) search API by default). Collection uses it: `POST
+/api/agent/collect` with a `query` searches the web and crawls the top results
+(in addition to any explicit `sources`). For chat and scheduled tasks, a
+tool-capable backend (agent-cli) is told it may `curl` the endpoint to fetch
+current results as part of its own research.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `search.endpoint` | `https://s.jina.ai/?q=` | The primary search URL; the query is URL-encoded and appended, and the request is sent with `Accept: application/json`. Set to `""` (with no `endpoints`) to disable web search. |
+| `search.apiKey` | `""` | Bearer token for the primary endpoint. **`s.jina.ai` requires an API key** (get one at jina.ai); without it the endpoint returns `401` and it is skipped. Keep this out of version control — it is a local secret. |
+| `search.endpoints` | `[]` | Additional search sites, so results are not tied to one provider. Each is `{ "url": "https://…/?q=", "apiKey": "" }` (a bare `"https://…/?q="` string also works). They are queried alongside the primary and the hits are merged, de-duplicated by URL. |
+| `search.timeoutMs` | `20000` | How long one search request may take before it is given up. |
+
+Multiple providers are queried in order and their results merged; a provider that
+fails, is unauthenticated, or is disabled is skipped — the others are still used,
+and a failed or disabled search never fails a run (it is logged and reported, and
+collection continues with whatever other sources are available).
 
 ### Reliability settings
 

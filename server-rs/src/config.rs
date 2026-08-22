@@ -17,6 +17,11 @@ pub const DEFAULT_TIMEOUT_MS: u64 = 300_000;
 pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 2_000_000;
 pub const DEFAULT_MAX_CONCURRENT_RUNS: usize = 2;
 
+/// Curl-accessible web-search endpoint (FR-AGENT-7); the URL-encoded query is
+/// appended and the request carries `Accept: application/json`.
+pub const DEFAULT_SEARCH_ENDPOINT: &str = "https://s.jina.ai/?q=";
+pub const DEFAULT_SEARCH_TIMEOUT_MS: u64 = 20_000;
+
 // Per-backend settings stay as raw JSON: the UI may send keys this server does
 // not model, and they must survive a round trip through the settings page.
 
@@ -35,11 +40,30 @@ pub struct AiConfig {
     pub max_concurrent_runs: usize,
 }
 
+/// One web-search provider (FR-AGENT-7). `api_key`, when set, is sent as
+/// `Authorization: Bearer …`; it is a local secret, never committed (NFR-5).
+#[derive(Debug, Clone)]
+pub struct SearchProvider {
+    pub url: String,
+    pub api_key: String,
+}
+
+/// Web-search settings (FR-AGENT-7). Search is not tied to one site (update #26):
+/// `providers` is the resolved, ordered list actually queried — the singular
+/// config `endpoint`/`apiKey` (kept for back-compat) followed by any `endpoints`.
+/// When `providers` is empty, search is disabled.
+#[derive(Debug, Clone)]
+pub struct SearchConfig {
+    pub timeout_ms: u64,
+    pub providers: Vec<SearchProvider>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub port: u16,
     pub data_dir: PathBuf,
     pub ai: AiConfig,
+    pub search: SearchConfig,
     pub log_file: PathBuf,
     pub log_to_stdout: bool,
 }
@@ -148,8 +172,47 @@ pub fn load(data_dir: PathBuf) -> AppConfig {
     let log_to_stdout = std::env::var("MNEMO_LOG").ok().as_deref() == Some("stdout")
         || file.get("logTarget").and_then(|v| v.as_str()) == Some("stdout");
 
+    // Web search (FR-AGENT-7). An explicit "" endpoint is kept (disables search);
+    // a missing key falls back to the default.
+    let search_obj = file.get("search").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    let endpoint = search_obj
+        .get("endpoint")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| DEFAULT_SEARCH_ENDPOINT.to_string());
+    let api_key = search_obj.get("apiKey").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    // Resolve the ordered provider list (update #26): the singular endpoint
+    // first (when non-empty), then any `endpoints` entries. An entry may be a
+    // bare URL string or `{ "url", "apiKey" }`; blank URLs are dropped.
+    let mut providers = Vec::new();
+    if !endpoint.trim().is_empty() {
+        providers.push(SearchProvider { url: endpoint.clone(), api_key: api_key.clone() });
+    }
+    if let Some(list) = search_obj.get("endpoints").and_then(|v| v.as_array()) {
+        for entry in list {
+            let (url, key) = match entry {
+                Value::String(s) => (s.clone(), String::new()),
+                Value::Object(o) => (
+                    o.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    o.get("apiKey").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                ),
+                _ => continue,
+            };
+            if !url.trim().is_empty() {
+                providers.push(SearchProvider { url, api_key: key });
+            }
+        }
+    }
+
+    let search = SearchConfig {
+        timeout_ms: positive(search_obj.get("timeoutMs"), DEFAULT_SEARCH_TIMEOUT_MS),
+        providers,
+    };
+
     AppConfig {
         port,
+        search,
         ai: AiConfig {
             kind: ai.get("type").and_then(|v| v.as_str()).unwrap_or("agent-cli").to_string(),
             output_language: ai
@@ -332,6 +395,64 @@ mod tests {
         );
         assert!(cfg.ai.backends.contains_key("claude-code"), "missing backend from defaults");
         fs::remove_dir_all(root).ok();
+    }
+
+    /// Web search: a missing `search` block gets defaults; an explicit empty
+    /// endpoint is kept (disables search); a user `timeoutMs` wins (FR-AGENT-7).
+    #[test]
+    fn search_config_defaults_and_overrides() {
+        std::env::remove_var("MNEMO_PORT");
+
+        let root = tmp("search-default");
+        let data = root.join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("config.json"), r#"{"port":3000}"#).unwrap();
+        let cfg = load(data.clone());
+        assert_eq!(cfg.search.timeout_ms, DEFAULT_SEARCH_TIMEOUT_MS);
+        assert_eq!(cfg.search.providers.len(), 1, "the default endpoint is one provider");
+        assert_eq!(cfg.search.providers[0].url, DEFAULT_SEARCH_ENDPOINT);
+        assert_eq!(cfg.search.providers[0].api_key, "", "no key by default");
+        fs::remove_dir_all(&root).ok();
+
+        let root = tmp("search-disabled");
+        let data = root.join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(
+            data.join("config.json"),
+            r#"{"search":{"endpoint":"","timeoutMs":5000}}"#,
+        )
+        .unwrap();
+        let cfg = load(data.clone());
+        assert_eq!(cfg.search.timeout_ms, 5000, "user timeout wins");
+        assert!(cfg.search.providers.is_empty(), "no endpoint and no endpoints → search disabled");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Multiple search sites: the singular endpoint plus `endpoints` entries
+    /// (object and bare-string forms) resolve to an ordered provider list, blanks
+    /// dropped (FR-AGENT-7, update #26).
+    #[test]
+    fn search_endpoints_resolve_to_a_provider_list() {
+        std::env::remove_var("MNEMO_PORT");
+        let root = tmp("search-multi");
+        let data = root.join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(
+            data.join("config.json"),
+            r#"{"search":{"endpoint":"https://a.test/?q=","apiKey":"ka","endpoints":[
+                {"url":"https://b.test/?q=","apiKey":"kb"},
+                "https://c.test/?q=",
+                {"url":""}
+            ]}}"#,
+        )
+        .unwrap();
+        let cfg = load(data.clone());
+        let urls: Vec<&str> = cfg.search.providers.iter().map(|p| p.url.as_str()).collect();
+        assert_eq!(urls, ["https://a.test/?q=", "https://b.test/?q=", "https://c.test/?q="]);
+        assert_eq!(cfg.search.providers[0].api_key, "ka", "primary key");
+        assert_eq!(cfg.search.providers[1].api_key, "kb", "object entry key");
+        assert_eq!(cfg.search.providers[2].api_key, "", "bare-string entry has no key");
+        fs::remove_dir_all(&root).ok();
     }
 
     /// Saving settings must not drop keys this server does not model.
