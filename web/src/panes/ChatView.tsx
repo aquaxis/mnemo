@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type ChatMessage } from '../api.js';
+import { Markdown } from '../markdown.js';
 
 /**
  * Turn a conversation into a scheduled task (FR-CHAT-9). The form is pre-filled
@@ -280,18 +281,26 @@ export function ChatView() {
           </p>
         )}
         <div className="mx-auto flex max-w-2xl flex-col gap-3">
-          {messages.map((m, i) => (
-            <div
-              key={i}
-              className={`max-w-[85%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm ${
-                m.role === 'user'
-                  ? 'self-end bg-accent text-white'
-                  : 'self-start border border-border bg-muted/40'
-              }`}
-            >
-              {m.content}
-            </div>
-          ))}
+          {messages.map((m, i) =>
+            m.role === 'user' ? (
+              // The user's own message is shown verbatim (FR-CHAT-10).
+              <div
+                key={i}
+                className="max-w-[85%] self-end whitespace-pre-wrap rounded-lg bg-accent px-3 py-2 text-sm text-white"
+              >
+                {m.content}
+              </div>
+            ) : (
+              // The agent's reply is Markdown, rendered as formatted output
+              // (FR-CHAT-10) rather than shown as literal markup.
+              <div
+                key={i}
+                className="max-w-[85%] self-start rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm"
+              >
+                <Markdown>{m.content}</Markdown>
+              </div>
+            )
+          )}
           {busy && (
             <div className="flex items-center gap-3 self-start rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-gray-500">
               <span>
