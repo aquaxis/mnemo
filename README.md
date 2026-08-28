@@ -118,7 +118,8 @@ On first run, `data/` is seeded from `templates/`. Edit `data/config.json`:
   },
   "search": {
     "endpoint": "https://s.jina.ai/?q=",
-    "apiKey": "",
+    "apiKey": "$JINA_API_KEY",
+    "noContent": true,
     "timeoutMs": 20000,
     "endpoints": []
   }
@@ -154,8 +155,9 @@ current results as part of its own research.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `search.endpoint` | `https://s.jina.ai/?q=` | The primary search URL; the query is URL-encoded and appended, and the request is sent with `Accept: application/json`. Set to `""` (with no `endpoints`) to disable web search. |
-| `search.apiKey` | `""` | Bearer token for the primary endpoint. **`s.jina.ai` requires an API key** (get one at jina.ai); without it the endpoint returns `401` and it is skipped. Keep this out of version control — it is a local secret. |
-| `search.endpoints` | `[]` | Additional search sites, so results are not tied to one provider. Each is `{ "url": "https://…/?q=", "apiKey": "" }` (a bare `"https://…/?q="` string also works). They are queried alongside the primary and the hits are merged, de-duplicated by URL. |
+| `search.apiKey` | `"$JINA_API_KEY"` | Bearer token for the primary endpoint. **`s.jina.ai` requires an API key** (get one at jina.ai); without it the endpoint returns `401` and it is skipped. **`$NAME` / `${NAME}` is replaced by that environment variable**, so the shipped default reads your exported `JINA_API_KEY` and the secret never has to be written into `config.json`. If you leave it empty, the key is taken from `JINA_API_KEY` (Jina endpoints) or `MNEMO_SEARCH_API_KEY` (any endpoint). A literal key typed here always wins over the environment. Keep a literal key out of version control — it is a local secret. |
+| `search.noContent` | `true` | Sends `X-Respond-With: no-content`, so the endpoint returns each hit's title, URL and description **without** the page text. Mnemo only uses search to find sources and then crawls the pages itself, so that text would be downloaded and thrown away — leaving this on makes searches smaller and faster. Set it to `false` for a provider that rejects the header or whose full snippets you want. |
+| `search.endpoints` | `[]` | Additional search sites, so results are not tied to one provider. Each is `{ "url": "https://…/?q=", "apiKey": "", "noContent": true }` (a bare `"https://…/?q="` string also works, and inherits the settings above). They are queried alongside the primary and the hits are merged, de-duplicated by URL. |
 | `search.timeoutMs` | `20000` | How long one search request may take before it is given up. |
 
 Multiple providers are queried in order and their results merged; a provider that

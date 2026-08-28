@@ -631,11 +631,15 @@ async fn collect(
     // configured providers (FR-AGENT-7, update #26).
     let mut urls = req.sources.clone();
     if let Some(query) = req.query.as_ref().map(|q| q.trim()).filter(|q| !q.is_empty()) {
-        let providers: Vec<(&str, &str)> = cfg
+        let providers: Vec<crawler::SearchTarget<'_>> = cfg
             .search
             .providers
             .iter()
-            .map(|p| (p.url.as_str(), p.api_key.as_str()))
+            .map(|p| crawler::SearchTarget {
+                url: p.url.as_str(),
+                api_key: p.api_key.as_str(),
+                no_content: p.no_content,
+            })
             .collect();
         let outcome =
             crawler::web_search_all(&providers, query, cfg.search.timeout_ms, SEARCH_SOURCE_LIMIT).await;

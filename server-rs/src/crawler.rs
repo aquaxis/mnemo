@@ -45,13 +45,20 @@ pub struct SearchHit {
 /// The URL-encoded query is appended to `endpoint` and the request carries
 /// `Accept: application/json`; a non-empty `api_key` is sent as
 /// `Authorization: Bearer …` (the default Jina `s.jina.ai` endpoint requires
-/// one — without it the endpoint answers `401`). An empty `endpoint` means
-/// search is disabled and yields no hits (not an error). The call is bounded by
-/// `timeout_ms` so a slow endpoint cannot wedge a run (FR-REL-1); any failure is
-/// returned as `Err` for the caller to log and skip (FR-AI-5, FR-REL-6).
+/// one — without it the endpoint answers `401`). When `no_content` is set the
+/// request also carries `X-Respond-With: no-content` (update #27), so the
+/// endpoint returns each hit's title/URL/description **without** the page text:
+/// Mnemo crawls the pages it selects itself, so that text would be fetched,
+/// parsed and thrown away. The hit list shape is unchanged either way.
+///
+/// An empty `endpoint` means search is disabled and yields no hits (not an
+/// error). The call is bounded by `timeout_ms` so a slow endpoint cannot wedge a
+/// run (FR-REL-1); any failure is returned as `Err` for the caller to log and
+/// skip (FR-AI-5, FR-REL-6).
 pub async fn web_search(
     endpoint: &str,
     api_key: &str,
+    no_content: bool,
     query: &str,
     timeout_ms: u64,
 ) -> Result<Vec<SearchHit>, String> {
@@ -65,6 +72,9 @@ pub async fn web_search(
         .build()
         .map_err(|e| e.to_string())?;
     let mut request = client.get(&url).header("Accept", "application/json");
+    if no_content {
+        request = request.header("X-Respond-With", "no-content");
+    }
     if !api_key.trim().is_empty() {
         request = request.bearer_auth(api_key.trim());
     }
@@ -87,12 +97,20 @@ pub struct SearchOutcome {
     pub errors: Vec<String>,
 }
 
-/// Query each provider `(url, api_key)` in order and **merge** the hits,
-/// de-duplicated by URL, up to `limit` (update #26). A provider that fails is
-/// **skipped** — its error is collected, not fatal — so the others are still
-/// used (FR-AI-5). An empty provider list or a blank query yields nothing.
+/// One provider to query, borrowed from the resolved configuration.
+pub struct SearchTarget<'a> {
+    pub url: &'a str,
+    pub api_key: &'a str,
+    /// Ask this provider for hits without page text (update #27).
+    pub no_content: bool,
+}
+
+/// Query each provider in order and **merge** the hits, de-duplicated by URL,
+/// up to `limit` (update #26). A provider that fails is **skipped** — its error
+/// is collected, not fatal — so the others are still used (FR-AI-5). An empty
+/// provider list or a blank query yields nothing.
 pub async fn web_search_all(
-    providers: &[(&str, &str)],
+    providers: &[SearchTarget<'_>],
     query: &str,
     timeout_ms: u64,
     limit: usize,
@@ -102,11 +120,11 @@ pub async fn web_search_all(
     if query.trim().is_empty() {
         return SearchOutcome { hits, errors };
     }
-    for (url, api_key) in providers {
+    for SearchTarget { url, api_key, no_content } in providers {
         if hits.len() >= limit {
             break;
         }
-        match web_search(url, api_key, query, timeout_ms).await {
+        match web_search(url, api_key, *no_content, query, timeout_ms).await {
             Ok(found) => {
                 for hit in found {
                     if !hits.iter().any(|h| h.url == hit.url) {
@@ -308,20 +326,21 @@ mod tests {
     #[tokio::test]
     async fn disabled_or_empty_query_yields_no_hits() {
         // No network is touched: an empty endpoint or blank query short-circuits.
-        assert!(web_search("", "", "anything", 1000).await.unwrap().is_empty());
-        assert!(web_search("https://s.jina.ai/?q=", "", "   ", 1000).await.unwrap().is_empty());
+        assert!(web_search("", "", true, "anything", 1000).await.unwrap().is_empty());
+        assert!(web_search("https://s.jina.ai/?q=", "", true, "   ", 1000).await.unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn web_search_all_skips_failing_providers() {
+        let target = |url| SearchTarget { url, api_key: "", no_content: true };
         // No providers, or a blank query, yields nothing without a panic.
         let out = web_search_all(&[], "mcp", 500, 5).await;
         assert!(out.hits.is_empty() && out.errors.is_empty());
-        let out = web_search_all(&[("http://127.0.0.1:9/?q=", "")], "   ", 500, 5).await;
+        let out = web_search_all(&[target("http://127.0.0.1:9/?q=")], "   ", 500, 5).await;
         assert!(out.hits.is_empty() && out.errors.is_empty(), "blank query short-circuits");
         // Two unreachable providers: each failure is reported, the run is not aborted.
         let out = web_search_all(
-            &[("http://127.0.0.1:9/?q=", ""), ("http://127.0.0.1:9/?q=", "")],
+            &[target("http://127.0.0.1:9/?q="), target("http://127.0.0.1:9/?q=")],
             "mcp",
             500,
             5,

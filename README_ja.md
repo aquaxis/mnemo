@@ -118,7 +118,8 @@ npm test            # cargo test
   },
   "search": {
     "endpoint": "https://s.jina.ai/?q=",
-    "apiKey": "",
+    "apiKey": "$JINA_API_KEY",
+    "noContent": true,
     "timeoutMs": 20000,
     "endpoints": []
   }
@@ -153,8 +154,9 @@ Mnemo は curl でアクセスできる検索エンドポイント（デフォ�
 | キー | 既定値 | 意味 |
 |-----|--------|------|
 | `search.endpoint` | `https://s.jina.ai/?q=` | 主となる検索 URL。クエリを URL エンコードして末尾に付け、`Accept: application/json` を付けて送信します。`endpoints` も空で `""` にすると Web 検索を無効化します。 |
-| `search.apiKey` | `""` | 主エンドポイントの Bearer トークン。**`s.jina.ai` は API キーが必須**（jina.ai で取得）。無い場合は `401` となりスキップされます。ローカルの秘密情報なのでバージョン管理に含めないでください。 |
-| `search.endpoints` | `[]` | 追加の検索サイト（1 つに限定しないため）。各要素は `{ "url": "https://…/?q=", "apiKey": "" }`（`"https://…/?q="` の文字列でも可）。主エンドポイントと併せて検索し、結果を URL で重複排除してマージします。 |
+| `search.apiKey` | `"$JINA_API_KEY"` | 主エンドポイントの Bearer トークン。**`s.jina.ai` は API キーが必須**（jina.ai で取得）。無い場合は `401` となりスキップされます。**`$NAME` / `${NAME}` は同名の環境変数の値に置き換えられる**ため、既定値のままなら export 済みの `JINA_API_KEY` が使われ、キーを `config.json` に書く必要がありません。空にした場合も `JINA_API_KEY`（Jina 系エンドポイント）または `MNEMO_SEARCH_API_KEY`（全エンドポイント）から取得します。ここに直接書いたキーは常に環境変数より優先されます。直接書く場合はローカルの秘密情報なのでバージョン管理に含めないでください。 |
+| `search.noContent` | `true` | `X-Respond-With: no-content` を送り、各ヒットのタイトル・URL・説明のみを取得します（ページ本文を含めない）。Mnemo は検索を「情報源の発見」にのみ使い、ページ本文は自前でクロールするため、本文を受け取っても捨てるだけです。有効のままにすると検索が軽く・速くなります。ヘッダーを受け付けないプロバイダーや、本文込みのスニペットが欲しい場合は `false` にしてください。 |
+| `search.endpoints` | `[]` | 追加の検索サイト（1 つに限定しないため）。各要素は `{ "url": "https://…/?q=", "apiKey": "", "noContent": true }`（`"https://…/?q="` の文字列でも可。その場合は上記の設定を継承）。主エンドポイントと併せて検索し、結果を URL で重複排除してマージします。 |
 | `search.timeoutMs` | `20000` | 1 回の検索リクエストの制限時間。 |
 
 複数のプロバイダは順に検索され、結果はマージされます。失敗・未認証・無効の
