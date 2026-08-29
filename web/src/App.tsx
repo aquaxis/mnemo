@@ -176,6 +176,66 @@ function Sidebar(props: {
   );
 }
 
+/** Estimated menu box, used to keep it inside the viewport near an edge. */
+const MENU_W = 168;
+const MENU_H = 44;
+
+/**
+ * The note row's context menu (FR-FILE-8): one Delete item, shown where the
+ * user right-clicked. It replaces the browser's own menu, closes on Escape, on
+ * a pointer press elsewhere, on scroll and after the item is chosen, and takes
+ * focus while open so the keyboard route is usable.
+ */
+function NoteContextMenu(props: { x: number; y: number; onDelete: () => void; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const { onClose } = props;
+
+  useEffect(() => {
+    ref.current?.querySelector('button')?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    const onDown = (e: Event) => {
+      if (!ref.current?.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    // Capture, so a press anywhere closes the menu before that target reacts.
+    document.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('scroll', onClose, true);
+    window.addEventListener('resize', onClose);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('scroll', onClose, true);
+      window.removeEventListener('resize', onClose);
+    };
+  }, [onClose]);
+
+  const left = Math.max(4, Math.min(props.x, window.innerWidth - MENU_W - 4));
+  const top = Math.max(4, Math.min(props.y, window.innerHeight - MENU_H - 4));
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      aria-label="Note actions"
+      className="fixed z-50 min-w-[10.5rem] rounded border border-border bg-white py-1 shadow-lg"
+      style={{ left, top }}
+    >
+      <button
+        role="menuitem"
+        className="block w-full px-3 py-2 text-left text-sm text-red-600 outline-none hover:bg-muted focus:bg-muted"
+        onClick={props.onDelete}
+      >
+        Delete
+      </button>
+    </div>
+  );
+}
+
 /** Middle pane for Notes: search, "new note", and the note list (FR-UI-3). */
 function NoteListPane(props: {
   leading?: ReactNode;
@@ -185,8 +245,34 @@ function NoteListPane(props: {
   selected: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
+  onDelete: (note: NoteMeta) => void;
   touch?: boolean;
 }) {
+  // Where the context menu is open, and the row to give focus back to (FR-FILE-8).
+  const [menu, setMenu] = useState<{ note: NoteMeta; x: number; y: number; row: HTMLElement } | null>(
+    null
+  );
+  const closeMenu = useCallback(() => {
+    setMenu((m) => {
+      m?.row.focus();
+      return null;
+    });
+  }, []);
+
+  function openMenu(note: NoteMeta, row: HTMLElement, x: number, y: number) {
+    setMenu({ note, x, y, row });
+  }
+
+  /** A right-click is a pointer gesture; the ContextMenu key and Shift+F10 are
+   *  the keyboard equivalents, so the action is not pointer-only (FR-UI-11). */
+  function onRowKeyDown(e: React.KeyboardEvent<HTMLElement>, note: NoteMeta) {
+    if (e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
+    e.preventDefault();
+    const row = e.currentTarget;
+    const r = row.getBoundingClientRect();
+    openMenu(note, row, r.left + 24, r.top + r.height / 2);
+  }
+
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
@@ -210,25 +296,62 @@ function NoteListPane(props: {
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         {props.notes.map((n) => (
-          <button
+          <div
             key={n.id}
-            className={`block w-full border-b border-border px-4 py-3 text-left hover:bg-muted ${
-              props.selected === n.id ? 'bg-muted' : ''
-            }`}
-            onClick={() => props.onSelect(n.id)}
+            className={`relative border-b border-border ${props.selected === n.id ? 'bg-muted' : ''}`}
           >
-            {/* The file name is the note's identity (FR-NOTE-7), and
-                the file's mtime its recency (FR-NOTE-8). */}
-            <div className="truncate font-medium">{n.title}</div>
-            <div className="mt-0.5 flex items-center gap-2 text-xs text-gray-500">
-              <span>{new Date(n.updated).toLocaleString()}</span>
-            </div>
-          </button>
+            <button
+              className={`block w-full px-4 py-3 text-left hover:bg-muted ${
+                props.touch ? 'pr-14' : ''
+              }`}
+              onClick={() => props.onSelect(n.id)}
+              onContextMenu={(e) => {
+                // Replace the browser's own menu with ours (FR-FILE-8).
+                e.preventDefault();
+                openMenu(n, e.currentTarget, e.clientX, e.clientY);
+              }}
+              onKeyDown={(e) => onRowKeyDown(e, n)}
+            >
+              {/* The file name is the note's identity (FR-NOTE-7), and
+                  the file's mtime its recency (FR-NOTE-8). */}
+              <div className="truncate font-medium">{n.title}</div>
+              <div className="mt-0.5 flex items-center gap-2 text-xs text-gray-500">
+                <span>{new Date(n.updated).toLocaleString()}</span>
+              </div>
+            </button>
+            {/* A touch layout has no right-click, so the same action gets an
+                explicit per-row control there (FR-UI-11). */}
+            {props.touch && (
+              <button
+                className="absolute right-1 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded text-lg text-gray-500 hover:bg-muted"
+                title={`Actions for ${n.title}`}
+                aria-label={`Actions for ${n.title}`}
+                onClick={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  openMenu(n, e.currentTarget, r.left - MENU_W, r.bottom);
+                }}
+              >
+                ⋯
+              </button>
+            )}
+          </div>
         ))}
         {!props.notes.length && (
           <p className="p-4 text-sm text-gray-400">No notes. Create one with “+”.</p>
         )}
       </div>
+      {menu && (
+        <NoteContextMenu
+          x={menu.x}
+          y={menu.y}
+          onDelete={() => {
+            const note = menu.note;
+            closeMenu();
+            props.onDelete(note);
+          }}
+          onClose={closeMenu}
+        />
+      )}
     </section>
   );
 }
@@ -328,6 +451,32 @@ export function App() {
     setStage('detail');
   }
 
+  /**
+   * Delete a note file from the middle pane's list (FR-FILE-8). The API half
+   * already exists — this is the second, faster route to the deletion the note
+   * view performs, so nothing but the selected file is touched (NFR-1b).
+   */
+  async function deleteNote(note: NoteMeta) {
+    // Irreversible, so confirm and name the file first.
+    if (!window.confirm(`Delete “${note.title}”? The file is removed and this cannot be undone.`)) {
+      return;
+    }
+    try {
+      await api.deleteNote(note.id);
+    } catch (e) {
+      // Report the failure rather than leave a stale row (FR-REL-6).
+      window.alert(`Could not delete “${note.title}”: ${(e as Error).message}`);
+      return;
+    }
+    if (selected === note.id) {
+      // Don't leave the right pane showing a note that no longer exists.
+      setSelected(null);
+      setStage('list');
+    }
+    // The same reload signal the category refetch uses (FR-UI-7).
+    setNotesReload((n) => n + 1);
+  }
+
   async function addCategory(parent?: string) {
     const name = window.prompt(
       parent ? `New sub-folder under “${parent}”` : 'New folder name'
@@ -377,6 +526,7 @@ export function App() {
         setStage('detail');
       }}
       onNew={newNote}
+      onDelete={deleteNote}
       touch={opts.touch}
     />
   );

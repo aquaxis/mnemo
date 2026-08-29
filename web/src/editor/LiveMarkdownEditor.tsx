@@ -84,6 +84,94 @@ const listMarkerPlugin = ViewPlugin.fromClass(
   { decorations: (v) => v.decorations }
 );
 
+/** The syntax-tree node type, taken from `syntaxTree` so `@lezer/common` need
+ *  not be added as a direct dependency just for a type. */
+type MdNode = ReturnType<ReturnType<typeof syntaxTree>['resolveInner']>;
+
+/** Schemes a note link may open. Anything else (notably `javascript:`) is left
+ *  alone — the same rule `rehype-sanitize` enforces for chat replies. */
+const OPENABLE_SCHEME = /^(https?|mailto):$/i;
+
+/** A bare URL typed into the body, for the case the parser did not autolink it. */
+const BARE_URL = /(?:https?:\/\/|mailto:)[^\s<>()[\]{}'"`]+/g;
+
+/**
+ * The link under `pos`, or null. Resolved against the **syntax tree** rather
+ * than the rendered element, so it works whether codemirror-live-markdown draws
+ * an anchor or a styled span, and keeps working if that markup changes.
+ */
+function linkAt(view: EditorView, pos: number): { href: string; from: number; to: number } | null {
+  const { state } = view;
+  for (let n: MdNode | null = syntaxTree(state).resolveInner(pos, 1); n; n = n.parent) {
+    if (n.name === 'URL') {
+      // An image's URL is not a link to follow.
+      if (n.parent?.name === 'Image') return null;
+      const href = state.doc.sliceString(n.from, n.to).replace(/^<|>$/g, '').trim();
+      return { href, from: n.from, to: n.to };
+    }
+    if (n.name === 'Image') return null;
+    if (n.name === 'Link') {
+      // Inline link `[text](url)`; a reference link has no URL child to follow.
+      const url = n.getChild('URL');
+      if (!url) return null;
+      return { href: state.doc.sliceString(url.from, url.to).trim(), from: n.from, to: n.to };
+    }
+    if (n.name === 'Document') break;
+  }
+  const line = state.doc.lineAt(pos);
+  BARE_URL.lastIndex = 0;
+  for (let m = BARE_URL.exec(line.text); m; m = BARE_URL.exec(line.text)) {
+    const from = line.from + m.index;
+    const to = from + m[0].length;
+    if (pos >= from && pos <= to) return { href: m[0], from, to };
+  }
+  return null;
+}
+
+/**
+ * Open a URL in a note in a **separate tab** (FR-NOTE-10).
+ *
+ * The note surface is this editor, not the HTML renderer the chat view uses
+ * (`web/src/markdown.tsx`, FR-CHAT-10), so the rule is implemented on the click
+ * rather than with an `<a target="_blank">` override. Handling `mousedown` (and
+ * returning true, which makes CodeMirror call `preventDefault`) intercepts the
+ * click *before* the caret is placed, and the Mnemo tab never navigates — so
+ * following a reference cannot lose an unsaved edit.
+ *
+ * Authoring still wins: a modifier-held click, and a click while the caret is
+ * already inside that link, fall through to CodeMirror so the URL can be
+ * edited. The document is never modified — this is presentation only, and the
+ * stored Markdown keeps the URL exactly as written.
+ */
+function openLinkOnClick(event: MouseEvent, view: EditorView): boolean {
+  if (event.button !== 0) return false;
+  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
+  const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  if (pos == null) return false;
+  const link = linkAt(view, pos);
+  if (!link) return false;
+  for (const r of view.state.selection.ranges) {
+    if (r.from <= link.to && r.to >= link.from) return false; // caret is in it: edit
+  }
+  let url: URL;
+  try {
+    // No base: a relative path or a `[[wiki link]]` is not a URL and is left
+    // to in-app navigation rather than opened externally (FR-NOTE-6).
+    url = new URL(link.href);
+  } catch {
+    return false;
+  }
+  if (!OPENABLE_SCHEME.test(url.protocol)) return false;
+  // The scripted equivalent of rel="noreferrer noopener": the opened page gets
+  // no `window.opener` handle back to Mnemo.
+  window.open(url.href, '_blank', 'noopener,noreferrer');
+  return true;
+}
+
+const linkOpener = EditorView.domEventHandlers({
+  mousedown: (event, view) => openLinkOnClick(event, view)
+});
+
 /**
  * Obsidian-style live Markdown editor (FR-NOTE-2, FR-NOTE-3).
  *
@@ -136,6 +224,7 @@ export function LiveMarkdownEditor(props: {
         imageField(),
         tableField,
         listMarkerPlugin,
+        linkOpener,
         editorTheme,
         ...common
       ];
@@ -148,7 +237,7 @@ export function LiveMarkdownEditor(props: {
         // working plain Markdown editor even if a live extension fails to build.
         state = EditorState.create({
           doc: props.value,
-          extensions: [markdown({ base: markdownLanguage }), ...common]
+          extensions: [markdown({ base: markdownLanguage }), linkOpener, ...common]
         });
       }
       view = new EditorView({ state, parent: hostRef.current });
