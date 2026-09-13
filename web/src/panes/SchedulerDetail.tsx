@@ -144,9 +144,29 @@ function JobDetail(props: {
   const [instruction, setInstruction] = useState('');
   const [category, setCategory] = useState('');
   const [status, setStatus] = useState('');
+  // While "Run now" is in flight: elapsed seconds and the timeout in force, so
+  // a slow run looks slow rather than stuck (mirrors FR-CHAT-7 in the chat).
+  const [running, setRunning] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [timeoutSec, setTimeoutSec] = useState<number | null>(null);
   // Only initialize the editable fields once per task, so an unrelated reload
   // (run now / enable-disable) doesn't discard unsaved edits.
   const initedFor = useRef<string | null>(null);
+
+  // Without the setting the elapsed time is shown alone (FR-CHAT-7 pattern).
+  useEffect(() => {
+    api
+      .settings()
+      .then((r) => setTimeoutSec(Math.round((r.ai?.timeoutMs ?? 0) / 1000) || null))
+      .catch(() => setTimeoutSec(null));
+  }, []);
+
+  // Count the seconds while a run is in flight.
+  useEffect(() => {
+    if (!running) return;
+    const t = window.setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [running]);
 
   useEffect(() => {
     let active = true;
@@ -183,10 +203,25 @@ function JobDetail(props: {
     props.onChange();
   }
   async function runNow() {
+    setRunning(true);
+    setElapsed(0);
     setStatus('Running…');
-    await api.runJob(job!.id);
-    setStatus('Run complete.');
-    props.onChange();
+    try {
+      // The job runs synchronously; on the server side a failing agent is
+      // bounded by `ai.timeoutMs` and the child is killed, so this returns a
+      // JobRun with status "error" rather than hanging forever (FR-REL-1).
+      const run = await api.runJob(job!.id);
+      if (run.status === 'success') {
+        setStatus(run.message || 'Run complete.');
+      } else {
+        setStatus(`Failed: ${run.message || 'unknown error'}`);
+      }
+    } catch (e) {
+      setStatus(`Failed: ${(e as Error).message || 'unknown error'}`);
+    } finally {
+      setRunning(false);
+      props.onChange();
+    }
   }
   async function toggle() {
     await api.updateJob(job!.id, { enabled: !job!.enabled });
@@ -221,7 +256,16 @@ function JobDetail(props: {
         <button className="text-red-500 hover:underline" onClick={remove}>
           Delete
         </button>
-        <span className="text-xs text-gray-500">{status}</span>
+        {running ? (
+          <span className="text-xs text-gray-500">
+            Running… {elapsed}s{timeoutSec ? ` / ${timeoutSec}s` : ''}
+            {elapsed >= 20 && <span className="text-gray-400"> — the agent is still working</span>}
+          </span>
+        ) : (
+          <span className={`text-xs ${status.startsWith('Failed') ? 'text-red-500' : 'text-gray-500'}`}>
+            {status}
+          </span>
+        )}
       </div>
 
       <div className="max-w-xl">
