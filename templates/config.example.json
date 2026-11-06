@@ -7,7 +7,7 @@
     "maxOutputBytes": 2000000,
     "maxConcurrentRuns": 2,
     "backends": {
-      "agent-cli": { "command": "agent-cli", "args": ["run", "--auto-approve-tools"], "model": null },
+      "agent-cli": { "command": "agent-cli", "args": ["one-shot", "--auto-approve-tools"], "model": null },
       "claude-code": { "command": "claude", "args": ["-p"], "model": null }
     }
   },

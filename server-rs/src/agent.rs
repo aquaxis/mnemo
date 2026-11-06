@@ -110,19 +110,34 @@ impl Agent {
             })?
             .map_err(|e| BackendError::new(e.to_string()))?;
 
-        let is_cli = command.ends_with("agent-cli");
-        // agent-cli's `run` reads stdin line by line, so the prompt is
-        // flattened to one line with a trailing newline to submit it.
-        let stdin_text = if is_cli {
-            format!("{}\n", prompt.split_whitespace().collect::<Vec<_>>().join(" "))
+        // Which contract does the configured argv speak? A first argument of
+        // `run` asks for the REPL (held-open turn, 0.43-era semantics; kept
+        // for stored configurations that still select it). Every agent-cli
+        // shipment since 0.46 also ships `one-shot <PROMPT>` — one prompt to
+        // completion, the answer alone on stdout, the process done (verified
+        // live, 2026-11-06) — and that is just the generic one-shot shape, so
+        // it shares the EOF path below. The configured args come from
+        // `data/config.json` first (FR-INSTALL-5); the built-in default now
+        // selects `one-shot` too.
+        let repl_mode = args.first().map(|a| a == "run").unwrap_or(false);
+        // Build the final argv: one-shot takes the prompt as its positional
+        // argument; REPL mode submits it on stdin as one line.
+        let (child_args, stdin_text) = if repl_mode {
+            (args.clone(), format!("{}\n", prompt.split_whitespace().collect::<Vec<_>>().join(" ")))
+        } else if args.first().map(|a| a == "one-shot").unwrap_or(false) {
+            // `one-shot <PROMPT>`: append the prompt as the positional.
+            let mut a = args.clone();
+            a.push(prompt.to_string());
+            (a, String::new())
         } else {
-            prompt.to_string()
+            // Any other one-shot CLI (claude -p, ...): prompt on stdin.
+            (args.clone(), prompt.to_string())
         };
 
         let mut child = Command::new(&command)
-            .args(&args)
+            .args(&child_args)
             .current_dir(work_dir)
-            .stdin(Stdio::piped())
+            .stdin(if repl_mode || !stdin_text.is_empty() { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -138,31 +153,38 @@ impl Agent {
                 }
             })?;
 
-        if !is_cli {
-            // One-shot backend: write the prompt and end stdin — `claude -p`
-            // finishes when its input ends. A broken pipe (child gone early)
-            // is an error to report, never a panic (FR-REL-2).
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(stdin_text.as_bytes()).await;
-                let _ = stdin.shutdown().await;
+        if !repl_mode {
+            // One-shot invocation: hand over the stdin payload when there is
+            // one, then wait for completion. A child that dies early reports
+            // as a failure, never a panic (FR-REL-2).
+            if !stdin_text.is_empty() {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(stdin_text.as_bytes()).await;
+                    let _ = stdin.shutdown().await;
+                }
             }
             let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
                 Ok(Ok(out)) => out,
                 Ok(Err(e)) => {
-                    return Err(BackendError::new(format!("AI backend \"{command}\" failed: {e}")))
+                    drop(permit);
+                    return Err(BackendError::new(format!("AI backend \"{command}\" failed: {e}")));
                 }
+                // The timed-out future owned `child`; dropping it with
+                // `kill_on_drop(true)` set kills and reaps the child, so no
+                // explicit stop is needed here (FR-REL-1).
                 Err(_) => {
+                    drop(permit);
                     return Err(BackendError::new(format!(
                         "AI backend \"{command}\" did not respond within {}s.",
                         ai.timeout_ms / 1000
-                    )))
+                    )));
                 }
             };
             drop(permit);
             return finish(command, ai, output);
         }
 
-        // ---- agent-cli: turn protocol (FR-REL-1) ----
+        // ---- agent-cli: REPL turn protocol (FR-REL-1; stored `run` configs) ----
         let mut stdin: Option<ChildStdin> = child.stdin.take();
         if let Some(ref mut s) = stdin {
             // The pipe is deliberately NOT closed here: EOF now races the
@@ -344,7 +366,7 @@ fn finish(
 
 fn backend_command(ai: &AiConfig) -> (String, Vec<String>) {
     let defaults: (&str, &[&str]) = match ai.kind.as_str() {
-        "agent-cli" => ("agent-cli", &["run", "--auto-approve-tools"]),
+        "agent-cli" => ("agent-cli", &["one-shot", "--auto-approve-tools"]),
         "claude-code" => ("claude", &["-p"]),
         _ => ("", &[]),
     };
@@ -486,6 +508,12 @@ mod tests {
         }
 
         let mut cfg = ai("agent-cli", Some(script.to_str().unwrap()));
+        // A first argv element of `run` is what selects the held-open REPL
+        // turn; the stock helper carries no args, so set it here.
+        cfg.backends.insert(
+            "agent-cli".into(),
+            json!({ "command": script.to_str().unwrap(), "args": ["run"] }),
+        );
         cfg.timeout_ms = 10_000;
         let agent = Agent::new(2);
         let started = std::time::Instant::now();
@@ -516,7 +544,52 @@ mod tests {
         cfg.timeout_ms = 10_000;
         let agent = Agent::new(2);
         let err = agent.complete(&cfg, std::path::Path::new("."), "hi").await.unwrap_err();
-        assert!(err.message.contains("ended without answering"), "{}", err.message);
+        // A one-shot CLI that dies early is reported through its exit status
+        // (FR-REL-2/FR-REL-6); the REPL-specific "ended without answering"
+        // wording belongs to the held-open turn path only.
+        assert!(err.message.contains("exited with"), "{}", err.message);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// agent-cli's one-shot contract (0.46+, verified live 2026-11-06): the
+    /// prompt travels as the trailing positional argv element and stdout
+    /// carries the answer alone. The invocation returns exactly that answer.
+    #[tokio::test]
+    async fn one_shot_agent_cli_answers_from_the_positional_prompt() {
+        let dir = std::env::temp_dir().join(format!("mnemo-oneshot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let seen = dir.join("seen.txt");
+        let script = dir.join("agent-cli");
+        // The mock records its trailing argv and answers; stdin stays closed.
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/bash\nshift  # drop the subcommand \"one-shot\"\nprintf \'%s\\n\' \"$*\" > {}\necho ONE-SHOT-ANSWER\nexit 0\n",
+                seen.to_str().unwrap().replace('\\', "\\\\")
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let mut cfg = ai("agent-cli", Some(script.to_str().unwrap()));
+        cfg.backends.insert(
+            "agent-cli".into(),
+            json!({ "command": script.to_str().unwrap(), "args": ["one-shot", "--auto-approve-tools"] }),
+        );
+        cfg.timeout_ms = 10_000;
+        let agent = Agent::new(2);
+        let out = agent
+            .complete(&cfg, std::path::Path::new("."), "what is 2+2?")
+            .await
+            .unwrap();
+        assert_eq!(out.trim(), "ONE-SHOT-ANSWER", "stdout carries the answer alone");
+        // The prompt arrived as the trailing positional, after the flags.
+        let got = std::fs::read_to_string(&seen).unwrap();
+        assert_eq!(got.trim(), "--auto-approve-tools what is 2+2?", "{}", got);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

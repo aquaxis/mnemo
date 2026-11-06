@@ -113,7 +113,7 @@ On first run, `data/` is seeded from `templates/`. Edit `data/config.json`:
     "maxOutputBytes": 2000000,
     "maxConcurrentRuns": 2,
     "backends": {
-      "agent-cli": { "command": "agent-cli", "args": ["run", "--auto-approve-tools"] },
+      "agent-cli": { "command": "agent-cli", "args": ["one-shot", "--auto-approve-tools"] },
       "claude-code": { "command": "claude", "args": ["-p"] }
     }
   },
@@ -132,7 +132,7 @@ On first run, `data/` is seeded from `templates/`. Edit `data/config.json`:
 and **Japanese** output. You can change these (and edit per-backend settings) from
 the **Settings** page in the app:
 
-- `agent-cli` — the [agent-cli](https://github.com/aquaxis/agent-cli) command (default; run as `agent-cli run --auto-approve-tools`, using its own configured provider).
+- `agent-cli` — the [agent-cli](https://github.com/aquaxis/agent-cli) command (default; run as `agent-cli one-shot --auto-approve-tools`, using its own configured provider).
 - `claude-code` — the Claude Code CLI (print mode). The Claude API is **not** used.
 - `local` — offline heuristic, no API or install required (internal fallback).
 

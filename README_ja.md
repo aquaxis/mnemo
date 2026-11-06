@@ -113,7 +113,7 @@ npm test            # cargo test
     "maxOutputBytes": 2000000,
     "maxConcurrentRuns": 2,
     "backends": {
-      "agent-cli": { "command": "agent-cli", "args": ["run", "--auto-approve-tools"] },
+      "agent-cli": { "command": "agent-cli", "args": ["one-shot", "--auto-approve-tools"] },
       "claude-code": { "command": "claude", "args": ["-p"] }
     }
   },
@@ -132,7 +132,7 @@ npm test            # cargo test
 **日本語** 出力です。アプリの
 **設定（Settings）ページ**から切り替えやバックエンドごとの設定編集もできます：
 
-- `agent-cli` — [agent-cli](https://github.com/aquaxis/agent-cli) コマンド（デフォルト。`agent-cli run --auto-approve-tools` で起動、agent-cli 側の設定プロバイダを使用）。
+- `agent-cli` — [agent-cli](https://github.com/aquaxis/agent-cli) コマンド（デフォルト。`agent-cli one-shot --auto-approve-tools` で起動、agent-cli 側の設定プロバイダを使用）。
 - `claude-code` — Claude Code CLI（print モード）。Claude API は使用しません。
 - `local` — オフラインの簡易処理。API やインストール不要（内部フォールバック）。
 

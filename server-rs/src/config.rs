@@ -169,7 +169,7 @@ fn default_backends() -> Map<String, Value> {
     let mut m = Map::new();
     m.insert(
         "agent-cli".into(),
-        json!({ "command": "agent-cli", "args": ["run", "--auto-approve-tools"], "model": null }),
+        json!({ "command": "agent-cli", "args": ["one-shot", "--auto-approve-tools"], "model": null }),
     );
     m.insert(
         "claude-code".into(),
