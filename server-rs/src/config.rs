@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 /// User-selectable backends (FR-AI-1, C-8); `local` is the internal fallback.
 pub const AI_BACKENDS: [&str; 2] = ["agent-cli", "claude-code"];
 
-pub const DEFAULT_TIMEOUT_MS: u64 = 300_000;
+pub const DEFAULT_TIMEOUT_MS: u64 = 600_000;
 pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 2_000_000;
 pub const DEFAULT_MAX_CONCURRENT_RUNS: usize = 2;
 

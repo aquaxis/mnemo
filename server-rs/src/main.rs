@@ -446,7 +446,8 @@ async fn run_job(s: Arc<AppState>, id: &str) -> Option<JobRun> {
         ("error".to_string(), Vec::new(), "the task has no instruction".to_string())
     } else {
         let hint = search_hint(&cfg.search.providers);
-        let prompt = instruction_prompt(&instruction, &cfg.ai.output_language, &hint);
+        let budget = s.agent.describe_budget(&cfg.ai);
+        let prompt = instruction_prompt(&instruction, &cfg.ai.output_language, &budget, &hint);
         match s.agent.complete(&cfg.ai, &cfg.data_dir, &prompt).await {
             Ok(output) => {
                 let body = format!(
@@ -556,7 +557,8 @@ async fn chat(State(s): State<Arc<AppState>>, Json(req): Json<ChatRequest>) -> i
     };
 
     let hint = search_hint(&cfg.search.providers);
-    let prompt = chat_prompt(&req.messages, &cfg.ai.output_language, &hint);
+    let budget = s.agent.describe_budget(&cfg.ai);
+    let prompt = chat_prompt(&req.messages, &cfg.ai.output_language, &budget, &hint);
     let reply = match s.agent.complete(&cfg.ai, &cfg.data_dir, &prompt).await {
         Ok(reply) => reply,
         Err(e) => {
@@ -808,25 +810,33 @@ fn search_hint(providers: &[SearchProvider]) -> String {
     hint
 }
 
-fn chat_prompt(messages: &[ChatMessage], lang: &str, hint: &str) -> String {
+fn chat_prompt(messages: &[ChatMessage], lang: &str, budget: &str, hint: &str) -> String {
     let history = messages
-        .iter()
-        .map(|m| format!("{}: {}", if m.role == "user" { "User" } else { "Assistant" }, m.content))
+        .iter().map(|m| format!("{}: {}", if m.role == "user" { "User" } else { "Assistant" }, m.content))
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "You are Mnemo's research assistant. Respond in {}.\n         For any question about facts, events, products or documentation, research the latest          information before answering: search broadly, prefer recent material, and cross-check          several independent sources rather than answering from memory.\n         Answer in depth with Markdown headings and lists, state the date or version of what you          report, and end with a \"Sources\" list of the pages you used. If you could not search,          say so and mark the answer unverified.\n{}{}\n{}\nAssistant:",
+        "You are Mnemo's research assistant. Respond in {}.\n         For any question about facts, events, products or documentation, research the latest          information before answering: search broadly, prefer recent material, and cross-check          several independent sources rather than answering from memory.\n         Answer in depth with Markdown headings and lists, state the date or version of what you          report, and end with a \"Sources\" list of the pages you used. If you could not search,          say so and mark the answer unverified.\n         Work within a strict time budget: you have {} to complete this answer. Plan for it — {}         search and read the most relevant sources first, and wrap up with the best answer you         have before the budget ends rather than being cut off mid-answer.\n{}{}\n{}\nAssistant:",
         language_name(lang),
+        budget,
+        budget,
         WORKSPACE_RULES,
         hint,
         history
     )
 }
 
-fn instruction_prompt(instruction: &str, lang: &str, hint: &str) -> String {
+fn instruction_prompt(
+    instruction: &str,
+    lang: &str,
+    budget: &str,
+    hint: &str,
+) -> String {
     format!(
-        "You are an AI agent. Perform the following task and return the result as Markdown.          Write the result in {}.\n{}{}         Return the result as your answer - Mnemo saves it as a note itself, so do not write the          report into \"notes/\" yourself.\n\nTask:\n{}\n",
+        "You are an AI agent. Perform the following task and return the result as Markdown.          Write the result in {}.\n         Work within a strict time budget: you have {} to complete this task. Plan for it — {}         search and read the most relevant sources first, and wrap up with the best result you         have before the budget ends rather than being cut off mid-task.\n{}{}         Return the result as your answer - Mnemo saves it as a note itself, so do not write the          report into \"notes/\" yourself.\n\nTask:\n{}\n",
         language_name(lang),
+        budget,
+        budget,
         WORKSPACE_RULES,
         hint,
         instruction
@@ -860,6 +870,65 @@ fn server_error(e: std::io::Error) -> (StatusCode, Json<serde_json::Value>) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::config::AiConfig;
+
+    /// Research prompts must carry the wrap-up directive with the effective
+    /// budget (FR-REL-8): a healthy research turn is expected to finish inside
+    /// `ai.timeoutMs`, so the prompt tells the agent to adapt its depth.
+    #[test]
+    fn research_prompts_carry_the_wrap_up_directive() {
+        let msg = |r: &str, c: &str| ChatMessage {
+            role: r.to_string(),
+            content: c.to_string(),
+        };
+        let messages = vec![msg("user", "What changed in web search this week?")];
+        let hint = "";
+
+        let chat = chat_prompt(&messages, "ja", "10 minutes", hint);
+        assert!(
+            chat.contains("Work within a strict time budget"),
+            "chat prompt lacks the budget directive"
+        );
+        assert!(
+            chat.contains("you have 10 minutes"),
+            "chat prompt does not state the budget"
+        );
+        assert!(
+            chat.contains("wrap up with the best answer"),
+            "chat prompt does not direct the wrap-up"
+        );
+
+        let task = instruction_prompt("Collect today's AI news", "ja", "10 minutes", hint);
+        assert!(
+            task.contains("Work within a strict time budget"),
+            "task prompt lacks the budget directive"
+        );
+        assert!(
+            task.contains("you have 10 minutes"),
+            "task prompt does not state the budget"
+        );
+        assert!(
+            task.contains("wrap up with the best result"),
+            "task prompt does not direct the wrap-up"
+        );
+
+        // The description scales: minutes for long budgets, seconds for short.
+        let ai = AiConfig {
+            kind: "agent-cli".into(),
+            output_language: "ja".into(),
+            backends: serde_json::Map::new(),
+            timeout_ms: 600_000,
+            max_output_bytes: 2_000_000,
+            max_concurrent_runs: 2,
+        };
+        assert!(s_agent().describe_budget(&ai).contains("minutes"));
+    }
+
+    fn s_agent() -> crate::agent::Agent {
+        crate::agent::Agent::new(1)
+    }
+
     /// npm and cargo each insist on their own manifest, so the version is
     /// duplicated by necessity and drift is a question of when, not if. The
     /// binary speaks for `Cargo.toml` (`env!("CARGO_PKG_VERSION")`, served by

@@ -109,7 +109,7 @@ On first run, `data/` is seeded from `templates/`. Edit `data/config.json`:
   "ai": {
     "type": "agent-cli",
     "outputLanguage": "ja",
-    "timeoutMs": 300000,
+    "timeoutMs": 600000,
     "maxOutputBytes": 2000000,
     "maxConcurrentRuns": 2,
     "backends": {
@@ -170,7 +170,7 @@ collection continues with whatever other sources are available).
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `ai.timeoutMs` | `300000` | A backend that does not answer within this time is stopped and the failure is reported, so chat and tasks never hang. The default is sized for research answers, which take minutes. Also editable on the Settings page. |
+| `ai.timeoutMs` | `600000` | A backend that does not answer within this time is stopped and the failure is reported, so chat and tasks never hang. The default is sized for research answers, which take minutes. Also editable on the Settings page. |
 | `ai.maxOutputBytes` | `2000000` | Cap on the output collected from a backend, so a runaway CLI cannot exhaust memory. |
 | `ai.maxConcurrentRuns` | `2` | How many agent runs (chat, collection, scheduled tasks) may run at once; the rest queue. |
 
