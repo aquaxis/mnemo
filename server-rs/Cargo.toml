@@ -1,6 +1,6 @@
 [package]
 name = "mnemo-server"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "Mnemo server (Rust port of server/, FR-* per .aiprj)"
 license = "MIT"
